@@ -101,12 +101,11 @@ check_webdav_updates() {
     local temp_info
     temp_info=$(create_secure_temp "webdav_info") || return 1
     
-    if ! curl -s -m "$CURL_TIMEOUT" -u "$WEBDAV_USER:$WEBDAV_PASS" \
-        "$WEBDAV_URL/latest_backup.info" -o "$temp_info"; then
+    if ! curl -s -m "$CURL_TIMEOUT" -u "$WEBDAV_USER:$WEBDAV_PASS" "$WEBDAV_URL/latest_backup.info" -o "$temp_info"; then
         cleanup_temp "$temp_info"
         log "ERROR" "无法连接到WebDAV服务器"
         return 1
-    }
+    fi
 
     local remote_info
     remote_info=$(cat "$temp_info")
@@ -135,8 +134,7 @@ download_from_webdav() {
     temp_file=$(create_secure_temp "ssh_backup") || return 1
     
     # 下载最新备份
-    if ! curl -s -m "$CURL_TIMEOUT" -u "$WEBDAV_USER:$WEBDAV_PASS" \
-        "$WEBDAV_URL/latest_backup.tar.gz" -o "$temp_file"; then
+    if ! curl -s -m "$CURL_TIMEOUT" -u "$WEBDAV_USER:$WEBDAV_PASS" "$WEBDAV_URL/latest_backup.tar.gz" -o "$temp_file"; then
         cleanup_temp "$temp_file"
         log "ERROR" "下载失败"
         return 1

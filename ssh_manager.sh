@@ -120,104 +120,156 @@ generate_keys() {
     return 0
 }
 
-# 上传文件到WebDAV
-upload_to_webdav() {
-    local user="$1"
-    local pass="$2"
-    
-    info "上传文件到WebDAV..."
-    
-    # 上传私钥
-    if ! curl -s -f -T "$SSH_DIR/$KEY_NAME" -u "$user:$pass" "$WEBDAV_FULL_URL/$KEY_NAME"; then
-        error "私钥上传失败"
-        return 1
-    fi
-    
-    # 上传公钥
-    if ! curl -s -f -T "$SSH_DIR/$KEY_NAME.pub" -u "$user:$pass" "$WEBDAV_FULL_URL/$KEY_NAME.pub"; then
-        error "公钥上传失败"
-        return 1
-    fi
-    
-    # 上传主机列表
-    if ! curl -s -f -T "$HOSTS_FILE" -u "$user:$pass" "$WEBDAV_FULL_URL/ssh_manager_hosts"; then
-        error "主机列表上传失败"
-        return 1
-    fi
-    
-    info "文件上传完成"
-    return 0
-}
-
 # 从WebDAV下载文件
 download_from_webdav() {
     local user="$1"
     local pass="$2"
+    local temp_dir
+    temp_dir=$(mktemp -d)
     
     info "正在从WebDAV下载文件..."
     
-    # 使用PROPFIND检查文件是否存在
-    if ! curl -s -f -X PROPFIND --header "Depth: 1" -u "$user:$pass" "$WEBDAV_FULL_URL/$KEY_NAME" >/dev/null 2>&1; then
-        info "WebDAV上未找到现有配置"
-        return 1
-    fi
-    
-    # 创建临时目录
-    local temp_dir=$(mktemp -d)
-    local success=true
-    
     # 下载私钥
-    if download_file "$WEBDAV_FULL_URL/$KEY_NAME" "$temp_dir/$KEY_NAME" "$user" "$pass" "application/octet-stream" && \
-       [ -s "$temp_dir/$KEY_NAME" ] && \
-       ! grep -q "^<!DOCTYPE html>\|^<html>\|^<a href=" "$temp_dir/$KEY_NAME" 2>/dev/null; then
-        chmod 600 "$temp_dir/$KEY_NAME"
-    else
+    if ! download_file "${WEBDAV_FULL_URL}/${KEY_NAME}" "${temp_dir}/${KEY_NAME}" "$user" "$pass"; then
         error "私钥下载失败"
-        success=false
+        rm -rf "$temp_dir"
+        return 1
     fi
     
     # 下载公钥
-    if download_file "$WEBDAV_FULL_URL/$KEY_NAME.pub" "$temp_dir/$KEY_NAME.pub" "$user" "$pass" "application/octet-stream" && \
-       [ -s "$temp_dir/$KEY_NAME.pub" ] && \
-       ! grep -q "^<!DOCTYPE html>\|^<html>\|^<a href=" "$temp_dir/$KEY_NAME.pub" 2>/dev/null; then
-        chmod 644 "$temp_dir/$KEY_NAME.pub"
-    else
+    if ! download_file "${WEBDAV_FULL_URL}/${KEY_NAME}.pub" "${temp_dir}/${KEY_NAME}.pub" "$user" "$pass"; then
         error "公钥下载失败"
-        success=false
-    fi
-    
-    # 下载主机列表（如果存在）
-    if download_file "$WEBDAV_FULL_URL/ssh_manager_hosts" "$temp_dir/ssh_manager_hosts" "$user" "$pass" "text/plain" 2>/dev/null; then
-        if grep -q "^<!DOCTYPE html>\|^<html>\|^<a href=" "$temp_dir/ssh_manager_hosts" 2>/dev/null; then
-            # 如果是HTML内容，创建新的空文件
-            : > "$temp_dir/ssh_manager_hosts"
-        fi
-        chmod 600 "$temp_dir/ssh_manager_hosts"
-    else
-        # 如果下载失败，创建新的空文件
-        : > "$temp_dir/ssh_manager_hosts"
-        chmod 600 "$temp_dir/ssh_manager_hosts"
-    fi
-    
-    # 如果密钥下载成功，移动文件到目标位置
-    if [ "$success" = true ]; then
-        # 备份现有文件
-        backup_file "$SSH_DIR/$KEY_NAME"
-        backup_file "$SSH_DIR/$KEY_NAME.pub"
-        backup_file "$HOSTS_FILE"
-        
-        # 移动新文件到位
-        mv "$temp_dir/$KEY_NAME" "$SSH_DIR/$KEY_NAME"
-        mv "$temp_dir/$KEY_NAME.pub" "$SSH_DIR/$KEY_NAME.pub"
-        mv "$temp_dir/ssh_manager_hosts" "$HOSTS_FILE"
-        
-        info "文件下载完成"
-        rm -rf "$temp_dir"
-        return 0
-    else
         rm -rf "$temp_dir"
         return 1
     fi
+    
+    # 下载主机列表
+    if ! download_file "${WEBDAV_FULL_URL}/hosts" "${temp_dir}/hosts" "$user" "$pass"; then
+        error "主机列表下载失败"
+        rm -rf "$temp_dir"
+        return 1
+    fi
+    
+    # 如果本地没有密钥，直接使用下载的密钥
+    if [ ! -f "$SSH_DIR/$KEY_NAME" ]; then
+        mv "${temp_dir}/${KEY_NAME}" "$SSH_DIR/$KEY_NAME"
+        mv "${temp_dir}/${KEY_NAME}.pub" "$SSH_DIR/${KEY_NAME}.pub"
+        chmod 600 "$SSH_DIR/$KEY_NAME"
+        chmod 644 "$SSH_DIR/${KEY_NAME}.pub"
+    fi
+    
+    # 合并主机列表（增量更新）
+    if [ -f "${temp_dir}/hosts" ]; then
+        # 确保本地hosts文件存在
+        touch "$HOSTS_FILE"
+        # 合并远程主机列表到本地，去除重复项
+        cat "${temp_dir}/hosts" "$HOSTS_FILE" | sort | uniq > "${temp_dir}/hosts_merged"
+        mv "${temp_dir}/hosts_merged" "$HOSTS_FILE"
+        chmod 600 "$HOSTS_FILE"
+    fi
+    
+    rm -rf "$temp_dir"
+    return 0
+}
+
+# 上传文件到WebDAV
+upload_to_webdav() {
+    local user="$1"
+    local pass="$2"
+    local temp_dir
+    temp_dir=$(mktemp -d)
+    
+    info "准备上传文件到WebDAV..."
+    
+    # 先下载现有的主机列表
+    if curl -s -f -X PROPFIND --header "Depth: 1" -u "$user:$pass" "$WEBDAV_FULL_URL/hosts" >/dev/null 2>&1; then
+        info "发现现有主机列表，正在合并..."
+        if ! download_file "${WEBDAV_FULL_URL}/hosts" "${temp_dir}/hosts" "$user" "$pass"; then
+            warn "无法下载现有主机列表，将创建新的列表"
+            cp "$HOSTS_FILE" "${temp_dir}/hosts"
+        else
+            # 合并主机列表（增量更新）
+            cat "$HOSTS_FILE" "${temp_dir}/hosts" | sort | uniq > "${temp_dir}/hosts_merged"
+            mv "${temp_dir}/hosts_merged" "${temp_dir}/hosts"
+        fi
+    else
+        cp "$HOSTS_FILE" "${temp_dir}/hosts"
+    fi
+    
+    # 上传合并后的主机列表
+    if ! curl -s -f -T "${temp_dir}/hosts" -u "$user:$pass" "$WEBDAV_FULL_URL/hosts"; then
+        error "主机列表上传失败"
+        rm -rf "$temp_dir"
+        return 1
+    fi
+    
+    # 如果远程没有密钥文件，则上传本地的密钥
+    if ! curl -s -f -X PROPFIND --header "Depth: 1" -u "$user:$pass" "$WEBDAV_FULL_URL/${KEY_NAME}" >/dev/null 2>&1; then
+        info "未发现远程密钥，上传本地密钥..."
+        # 上传私钥
+        if ! curl -s -f -T "$SSH_DIR/$KEY_NAME" -u "$user:$pass" "$WEBDAV_FULL_URL/${KEY_NAME}"; then
+            error "私钥上传失败"
+            rm -rf "$temp_dir"
+            return 1
+        fi
+        
+        # 上传公钥
+        if ! curl -s -f -T "$SSH_DIR/${KEY_NAME}.pub" -u "$user:$pass" "$WEBDAV_FULL_URL/${KEY_NAME}.pub"; then
+            error "公钥上传失败"
+            rm -rf "$temp_dir"
+            return 1
+        fi
+    fi
+    
+    rm -rf "$temp_dir"
+    success "文件上传完成"
+    return 0
+}
+
+# 下载文件
+download_file() {
+    local url="$1"
+    local output="$2"
+    local user="$3"
+    local pass="$4"
+
+    if ! curl -s -f -o "$output" -u "$user:$pass" "$url"; then
+        error "下载失败: $url"
+        return 1
+    fi
+    return 0
+}
+
+# 授权当前主机
+authorize_current_host() {
+    local pub_key
+    pub_key=$(cat "$SSH_DIR/${KEY_NAME}.pub")
+    if ! grep -q "$pub_key" "$HOSTS_FILE"; then
+        echo "$pub_key" >> "$HOSTS_FILE"
+        success "已授权当前主机: $CURRENT_HOST"
+    else
+        warn "当前主机已经被授权"
+    fi
+}
+
+# 批量授权主机
+batch_authorize_hosts() {
+    local hosts_file="$1"
+    if [ ! -f "$hosts_file" ]; then
+        error "主机列表文件不存在: $hosts_file"
+        return 1
+    fi
+
+    while IFS= read -r host; do
+        if [ -n "$host" ]; then
+            if ! grep -q "$host" "$HOSTS_FILE"; then
+                echo "$host" >> "$HOSTS_FILE"
+                success "已授权主机: $host"
+            else
+                warn "主机已经被授权: $host"
+            fi
+        fi
+    done < "$hosts_file"
 }
 
 # 显示授权主机列表
@@ -243,12 +295,13 @@ list_hosts() {
 # 显示菜单
 show_menu() {
     echo -e "\n${BLUE}=== SSH Manager 菜单 ===${NC}"
-    echo "1) 生成新的SSH密钥对"
-    echo "2) 显示授权主机列表"
-    echo "3) 同步到WebDAV"
-    echo "4) 从WebDAV同步"
-    echo "5) 退出"
-    echo -e "${YELLOW}请选择操作 [1-5]:${NC} "
+    echo "1) 查看授权主机列表"
+    echo "2) 授权当前主机"
+    echo "3) 批量授权主机"
+    echo "4) 同步到WebDAV"
+    echo "5) 从WebDAV同步"
+    echo "6) 退出"
+    echo -e "${YELLOW}请选择操作 [1-6]:${NC} "
 }
 
 # 处理菜单选择
@@ -259,22 +312,27 @@ handle_menu() {
         read -r choice
         case $choice in
             1)
-                generate_keys
-                ;;
-            2)
                 list_hosts
                 ;;
+            2)
+                authorize_current_host
+                ;;
             3)
+                echo -e "${YELLOW}请输入主机列表文件路径:${NC} "
+                read -r hosts_file
+                batch_authorize_hosts "$hosts_file"
+                ;;
+            4)
                 if upload_to_webdav "$WEBDAV_USER" "$WEBDAV_PASS"; then
                     success "文件已成功上传到WebDAV"
                 fi
                 ;;
-            4)
+            5)
                 if download_from_webdav "$WEBDAV_USER" "$WEBDAV_PASS"; then
                     success "文件已成功从WebDAV下载"
                 fi
                 ;;
-            5)
+            6)
                 success "感谢使用！"
                 exit 0
                 ;;
@@ -313,20 +371,32 @@ main() {
             exit 1
         fi
         
-        # 如果是首次运行，先下载现有配置
+        # 检查是否需要初始化密钥
         if [ ! -f "$SSH_DIR/$KEY_NAME" ]; then
-            info "尝试从WebDAV下载现有配置..."
-            if ! download_from_webdav "$WEBDAV_USER" "$WEBDAV_PASS"; then
-                info "未找到现有配置，开始初始化..."
-                generate_keys
-                
-                # 上传新生成的文件
-                if ! upload_to_webdav "$WEBDAV_USER" "$WEBDAV_PASS"; then
-                    error "文件上传失败"
+            # 检查WebDAV上是否有现有配置
+            info "检查WebDAV上的配置..."
+            if curl -s -f -X PROPFIND --header "Depth: 1" -u "$WEBDAV_USER:$WEBDAV_PASS" "$WEBDAV_FULL_URL/${KEY_NAME}" >/dev/null 2>&1; then
+                info "发现现有配置，正在下载..."
+                if ! download_from_webdav "$WEBDAV_USER" "$WEBDAV_PASS"; then
+                    error "配置下载失败"
                     exit 1
                 fi
+                success "已从WebDAV下载配置"
+            else
+                info "未找到现有配置，开始初始化..."
+                generate_keys
             fi
         fi
+        
+        # 自动授权当前主机
+        authorize_current_host
+        
+        # 同步到WebDAV（增量更新）
+        if ! upload_to_webdav "$WEBDAV_USER" "$WEBDAV_PASS"; then
+            error "同步到WebDAV失败"
+            exit 1
+        fi
+        success "初始配置完成"
         
         # 显示交互式菜单
         handle_menu

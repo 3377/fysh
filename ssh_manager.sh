@@ -72,37 +72,25 @@ test_webdav() {
     return 0
 }
 
-# 初始化配置
-init_config() {
-    # 确保SSH管理目录存在
-    if [ ! -d "$SSH_MANAGER_DIR" ]; then
-        mkdir -p "$SSH_MANAGER_DIR"
-        chmod 700 "$SSH_MANAGER_DIR"
-    fi
-    
-    # 如果主机列表文件不存在，创建一个空文件
-    if [ ! -f "$HOSTS_FILE" ]; then
-        touch "$HOSTS_FILE"
-        chmod 600 "$HOSTS_FILE"
-    fi
-    
-    # 创建备份目录
-    if [ ! -d "$SSH_MANAGER_DIR/backups" ]; then
-        mkdir -p "$SSH_MANAGER_DIR/backups"
-        chmod 700 "$SSH_MANAGER_DIR/backups"
-    fi
+# 清理现有配置
+clean_local_config() {
+    info "清理本地配置..."
+    rm -rf "$SSH_MANAGER_DIR"
+    mkdir -p "$SSH_MANAGER_DIR"
+    chmod 700 "$SSH_MANAGER_DIR"
 }
 
-# 备份文件
-backup_file() {
-    local file="$1"
-    local backup_dir="$SSH_MANAGER_DIR/backups"
-    local backup_file="$backup_dir/$(basename "$file").bak.${TIMESTAMP}"
+# 初始化配置
+init_config() {
+    info "初始化配置目录..."
     
-    if [ -f "$file" ]; then
-        cp "$file" "$backup_file"
-        chmod 600 "$backup_file"
-    fi
+    # 创建必要的目录
+    mkdir -p "$SSH_MANAGER_DIR"
+    chmod 700 "$SSH_MANAGER_DIR"
+    
+    # 确保hosts文件存在
+    touch "$HOSTS_FILE"
+    chmod 600 "$HOSTS_FILE"
 }
 
 # 生成新的SSH密钥对
@@ -154,64 +142,53 @@ download_from_webdav() {
     local pass="$2"
     local temp_dir
     temp_dir=$(mktemp -d)
+    local download_success=false
     
     info "正在从WebDAV下载文件..."
     
     # 下载私钥
-    if ! curl -s -f -L -o "${temp_dir}/${KEY_NAME}" -u "$user:$pass" "$WEBDAV_FULL_URL/${KEY_NAME}"; then
-        error "私钥下载失败"
-        rm -rf "$temp_dir"
-        return 1
-    fi
-    
-    # 验证私钥文件
-    if grep -q "^<!DOCTYPE\|^<html\|^<a href=" "${temp_dir}/${KEY_NAME}" || [ ! -s "${temp_dir}/${KEY_NAME}" ]; then
-        error "私钥文件无效"
-        rm -rf "$temp_dir"
-        return 1
-    fi
-    
-    # 下载公钥
-    if ! curl -s -f -L -o "${temp_dir}/${KEY_NAME}.pub" -u "$user:$pass" "$WEBDAV_FULL_URL/${KEY_NAME}.pub"; then
-        error "公钥下载失败"
-        rm -rf "$temp_dir"
-        return 1
-    fi
-    
-    # 验证公钥文件
-    if grep -q "^<!DOCTYPE\|^<html\|^<a href=" "${temp_dir}/${KEY_NAME}.pub" || [ ! -s "${temp_dir}/${KEY_NAME}.pub" ]; then
-        error "公钥文件无效"
-        rm -rf "$temp_dir"
-        return 1
-    fi
-    
-    # 下载主机列表
-    if ! curl -s -f -L -o "${temp_dir}/hosts" -u "$user:$pass" "$WEBDAV_FULL_URL/hosts"; then
-        warn "主机列表下载失败，将创建新的列表"
-        touch "${temp_dir}/hosts"
+    if curl -s -f -L -o "${temp_dir}/${KEY_NAME}" -u "$user:$pass" "$WEBDAV_FULL_URL/${KEY_NAME}"; then
+        if ! grep -q "^<!DOCTYPE\|^<html\|^<a href=" "${temp_dir}/${KEY_NAME}" && [ -s "${temp_dir}/${KEY_NAME}" ]; then
+            download_success=true
+        else
+            warn "私钥文件无效，将创建新密钥"
+        fi
     else
-        # 验证主机列表文件
-        if grep -q "^<!DOCTYPE\|^<html\|^<a href=" "${temp_dir}/hosts"; then
-            warn "主机列表文件无效，将创建新的列表"
-            : > "${temp_dir}/hosts"
+        warn "私钥下载失败，将创建新密钥"
+    fi
+
+    # 如果下载成功，继续下载公钥
+    if [ "$download_success" = true ]; then
+        if ! curl -s -f -L -o "${temp_dir}/${KEY_NAME}.pub" -u "$user:$pass" "$WEBDAV_FULL_URL/${KEY_NAME}.pub" || \
+           grep -q "^<!DOCTYPE\|^<html\|^<a href=" "${temp_dir}/${KEY_NAME}.pub" || \
+           [ ! -s "${temp_dir}/${KEY_NAME}.pub" ]; then
+            download_success=false
+            warn "公钥文件无效，将创建新密钥"
         fi
     fi
-    
-    # 如果本地没有密钥，直接使用下载的密钥
-    if [ ! -f "$SSH_DIR/$KEY_NAME" ]; then
+
+    # 如果密钥下载成功，移动到目标位置
+    if [ "$download_success" = true ]; then
+        info "使用WebDAV上的现有密钥"
         mv "${temp_dir}/${KEY_NAME}" "$SSH_DIR/$KEY_NAME"
         mv "${temp_dir}/${KEY_NAME}.pub" "$SSH_DIR/${KEY_NAME}.pub"
         chmod 600 "$SSH_DIR/$KEY_NAME"
         chmod 644 "$SSH_DIR/${KEY_NAME}.pub"
+    else
+        info "生成新的SSH密钥对..."
+        generate_keys
     fi
     
-    # 合并主机列表（增量更新）
-    if [ -f "${temp_dir}/hosts" ] && [ -s "${temp_dir}/hosts" ]; then
-        # 确保本地hosts文件存在
-        touch "$HOSTS_FILE"
-        # 合并远程主机列表到本地，去除重复项
-        cat "${temp_dir}/hosts" "$HOSTS_FILE" | grep -v "^<!DOCTYPE\|^<html\|^<a href=" | sort | uniq > "${temp_dir}/hosts_merged"
-        mv "${temp_dir}/hosts_merged" "$HOSTS_FILE"
+    # 下载主机列表（即使密钥下载失败也要尝试）
+    if curl -s -f -L -o "${temp_dir}/hosts" -u "$user:$pass" "$WEBDAV_FULL_URL/hosts" && \
+       ! grep -q "^<!DOCTYPE\|^<html\|^<a href=" "${temp_dir}/hosts" && \
+       [ -s "${temp_dir}/hosts" ]; then
+        info "合并主机列表..."
+        mv "${temp_dir}/hosts" "$HOSTS_FILE"
+        chmod 600 "$HOSTS_FILE"
+    else
+        warn "主机列表下载失败或无效，创建新的列表"
+        : > "$HOSTS_FILE"
         chmod 600 "$HOSTS_FILE"
     fi
     
@@ -402,39 +379,34 @@ main() {
         WEBDAV_USER="$1"
         WEBDAV_PASS="$2"
         
-        # 初始化配置
-        init_config
-        
         # 测试WebDAV连接
         if ! test_webdav "$WEBDAV_USER" "$WEBDAV_PASS"; then
             exit 1
         fi
         
-        # 检查是否需要初始化密钥
-        if [ ! -f "$SSH_DIR/$KEY_NAME" ]; then
-            # 检查WebDAV上是否有现有配置
-            info "检查WebDAV上的配置..."
-            if curl -s -f -L -X PROPFIND --header "Depth: 1" -u "$WEBDAV_USER:$WEBDAV_PASS" "$WEBDAV_FULL_URL/${KEY_NAME}" >/dev/null 2>&1; then
-                info "发现现有配置，正在下载..."
-                if ! download_from_webdav "$WEBDAV_USER" "$WEBDAV_PASS"; then
-                    error "配置下载失败"
-                    exit 1
-                fi
-                success "已从WebDAV下载配置"
-            else
-                info "未找到现有配置，开始初始化..."
-                generate_keys
-            fi
-        fi
+        # 清理现有配置
+        clean_local_config
         
-        # 自动授权当前主机
-        authorize_current_host
+        # 初始化新的配置目录
+        init_config
         
-        # 同步到WebDAV（增量更新）
-        if ! upload_to_webdav "$WEBDAV_USER" "$WEBDAV_PASS"; then
-            error "同步到WebDAV失败"
+        # 从WebDAV下载配置
+        info "从WebDAV同步配置..."
+        if ! download_from_webdav "$WEBDAV_USER" "$WEBDAV_PASS"; then
+            error "配置同步失败"
             exit 1
         fi
+        
+        # 授权当前主机
+        authorize_current_host
+        
+        # 上传更新后的配置到WebDAV
+        info "上传更新后的配置到WebDAV..."
+        if ! upload_to_webdav "$WEBDAV_USER" "$WEBDAV_PASS"; then
+            error "配置上传失败"
+            exit 1
+        fi
+        
         success "初始配置完成"
         
         # 显示交互式菜单

@@ -47,16 +47,40 @@ test_webdav() {
     
     info "测试WebDAV连接..."
     
-    # 使用PROPFIND方法测试WebDAV连接
-    if ! curl -s -f -X PROPFIND --header "Depth: 0" -u "$user:$pass" "$WEBDAV_FULL_URL" >/dev/null 2>&1; then
-        error "WebDAV连接失败，请检查用户名和密码"
+    # 首先测试基本连接
+    if ! curl -s -f -X PROPFIND --header "Depth: 0" -u "$user:$pass" "$WEBDAV_BASE_URL" >/dev/null 2>&1; then
+        error "WebDAV服务器连接失败"
         return 1
     fi
     
-    # 测试WebDAV写入权限（创建临时文件）
+    # 尝试创建必要的目录结构
+    if ! curl -s -f -X MKCOL -u "$user:$pass" "$WEBDAV_FULL_URL" >/dev/null 2>&1; then
+        # 如果创建失败，可能是目录已存在，继续测试
+        info "WebDAV目录已存在或无法创建"
+    fi
+    
+    # 测试目录访问权限
+    if ! curl -s -f -X PROPFIND --header "Depth: 0" -u "$user:$pass" "$WEBDAV_FULL_URL" >/dev/null 2>&1; then
+        error "WebDAV目录访问失败"
+        return 1
+    fi
+    
+    # 测试写入权限（创建临时文件）
     local temp_file="test_${TIMESTAMP}.tmp"
-    if ! echo "test" | curl -s -f -T - -u "$user:$pass" "$WEBDAV_FULL_URL/$temp_file"; then
-        error "WebDAV写入测试失败，请检查权限"
+    local test_content="test"
+    
+    # 创建临时文件
+    if ! echo "$test_content" | curl -s -f -X PUT -u "$user:$pass" \
+        -H "Content-Type: text/plain" \
+        --data-binary @- \
+        "$WEBDAV_FULL_URL/$temp_file" >/dev/null 2>&1; then
+        error "WebDAV写入测试失败"
+        return 1
+    fi
+    
+    # 验证文件是否成功创建
+    if ! curl -s -f -X PROPFIND --header "Depth: 1" -u "$user:$pass" "$WEBDAV_FULL_URL/$temp_file" >/dev/null 2>&1; then
+        error "WebDAV文件验证失败"
         return 1
     fi
     
@@ -65,6 +89,44 @@ test_webdav() {
     
     info "WebDAV连接测试成功"
     return 0
+}
+
+# 从WebDAV获取重定向URL
+get_redirect_url() {
+    local url="$1"
+    local user="$2"
+    local pass="$3"
+    
+    # 使用curl获取重定向URL，但不跟随重定向
+    local redirect_url=$(curl -s -I -u "$user:$pass" "$url" | grep -i "^location:" | cut -d' ' -f2- | tr -d '\r\n')
+    echo "$redirect_url"
+}
+
+# 从WebDAV下载文件
+download_file() {
+    local url="$1"
+    local output="$2"
+    local user="$3"
+    local pass="$4"
+    local accept_type="$5"
+    
+    # 先获取重定向URL
+    local redirect_url=$(get_redirect_url "$url" "$user" "$pass")
+    
+    if [ -n "$redirect_url" ]; then
+        # 使用重定向URL下载
+        curl -s -f --max-time 30 \
+            -H "Accept: ${accept_type}" \
+            -H "User-Agent: curl/7.68.0" \
+            -o "$output" \
+            "$redirect_url"
+    else
+        # 直接从WebDAV下载
+        curl -s -f -u "$user:$pass" \
+            -H "Accept: ${accept_type}" \
+            -o "$output" \
+            "$url"
+    fi
 }
 
 # 从WebDAV下载密钥和配置
@@ -80,41 +142,68 @@ download_from_webdav() {
         return 1
     fi
     
-    # 下载密钥
-    if curl -s -f -u "$user:$pass" "$WEBDAV_FULL_URL/$KEY_NAME" -o "$SSH_DIR/$KEY_NAME" && \
-       curl -s -f -u "$user:$pass" "$WEBDAV_FULL_URL/$KEY_NAME.pub" -o "$SSH_DIR/$KEY_NAME.pub"; then
-        chmod 600 "$SSH_DIR/$KEY_NAME"
-        chmod 644 "$SSH_DIR/$KEY_NAME.pub"
-        info "密钥下载完成"
-        
-        # 下载主机列表
-        if curl -s -f -u "$user:$pass" "$WEBDAV_FULL_URL/ssh_manager_hosts" -o "$HOSTS_FILE"; then
-            chmod 600 "$HOSTS_FILE"
-            info "主机列表下载完成"
-        fi
-        return 0
-    fi
-    return 1
-}
-
-# 显示上传进度条
-show_progress() {
-    local current=$1
-    local total=$2
-    local width=50
-    local progress=$((current * width / total))
-    local percentage=$((current * 100 / total))
+    # 创建临时目录
+    local temp_dir=$(mktemp -d)
+    local success=true
     
-    # 构建进度条
-    printf "\r["
-    for ((i=0; i<width; i++)); do
-        if [ $i -lt $progress ]; then
-            printf "="
-        else
-            printf " "
+    # 下载私钥
+    if download_file "$WEBDAV_FULL_URL/$KEY_NAME" "$temp_dir/$KEY_NAME" "$user" "$pass" "application/octet-stream" && \
+       [ -s "$temp_dir/$KEY_NAME" ] && \
+       ! grep -q "^<!DOCTYPE html>\|^<html>\|^<a href=" "$temp_dir/$KEY_NAME" 2>/dev/null; then
+        chmod 600 "$temp_dir/$KEY_NAME"
+    else
+        error "私钥下载失败"
+        success=false
+    fi
+    
+    # 下载公钥
+    if download_file "$WEBDAV_FULL_URL/$KEY_NAME.pub" "$temp_dir/$KEY_NAME.pub" "$user" "$pass" "application/octet-stream" && \
+       [ -s "$temp_dir/$KEY_NAME.pub" ] && \
+       ! grep -q "^<!DOCTYPE html>\|^<html>\|^<a href=" "$temp_dir/$KEY_NAME.pub" 2>/dev/null; then
+        chmod 644 "$temp_dir/$KEY_NAME.pub"
+    else
+        error "公钥下载失败"
+        success=false
+    fi
+    
+    # 下载主机列表（如果存在）
+    if download_file "$WEBDAV_FULL_URL/ssh_manager_hosts" "$temp_dir/ssh_manager_hosts" "$user" "$pass" "text/plain" 2>/dev/null; then
+        if grep -q "^<!DOCTYPE html>\|^<html>\|^<a href=" "$temp_dir/ssh_manager_hosts" 2>/dev/null; then
+            # 如果是HTML内容，创建新的空文件
+            : > "$temp_dir/ssh_manager_hosts"
         fi
-    done
-    printf "] %3d%%" $percentage
+        chmod 600 "$temp_dir/ssh_manager_hosts"
+    else
+        # 如果下载失败，创建新的空文件
+        : > "$temp_dir/ssh_manager_hosts"
+        chmod 600 "$temp_dir/ssh_manager_hosts"
+    fi
+    
+    # 如果密钥下载成功，移动文件到目标位置
+    if [ "$success" = true ]; then
+        # 备份现有文件
+        if [ -f "$SSH_DIR/$KEY_NAME" ]; then
+            cp "$SSH_DIR/$KEY_NAME" "$SSH_DIR/$KEY_NAME.bak.${TIMESTAMP}" 2>/dev/null
+        fi
+        if [ -f "$SSH_DIR/$KEY_NAME.pub" ]; then
+            cp "$SSH_DIR/$KEY_NAME.pub" "$SSH_DIR/$KEY_NAME.pub.bak.${TIMESTAMP}" 2>/dev/null
+        fi
+        if [ -f "$HOSTS_FILE" ]; then
+            cp "$HOSTS_FILE" "$HOSTS_FILE.bak.${TIMESTAMP}" 2>/dev/null
+        fi
+        
+        # 移动新文件到位
+        mv "$temp_dir/$KEY_NAME" "$SSH_DIR/$KEY_NAME"
+        mv "$temp_dir/$KEY_NAME.pub" "$SSH_DIR/$KEY_NAME.pub"
+        mv "$temp_dir/ssh_manager_hosts" "$HOSTS_FILE"
+        
+        info "文件下载完成"
+        rm -rf "$temp_dir"
+        return 0
+    else
+        rm -rf "$temp_dir"
+        return 1
+    fi
 }
 
 # 上传单个文件到WebDAV
@@ -130,9 +219,16 @@ upload_file() {
     # 获取文件大小
     local size=$(stat -f%z "$file" 2>/dev/null || stat -c%s "$file")
     
+    # 确保目标目录存在
+    local target_dir=$(dirname "$target")
+    if [ "$target_dir" != "." ]; then
+        curl -s -f -X MKCOL -u "$user:$pass" "$WEBDAV_FULL_URL/$target_dir" >/dev/null 2>&1
+    fi
+    
     # 使用curl的进度回调
     curl -s -T "$file" \
          -u "$user:$pass" \
+         -H "Content-Type: application/octet-stream" \
          "$WEBDAV_FULL_URL/$target" \
          --progress-bar \
          2>&1 | while read -r line; do
@@ -144,8 +240,14 @@ upload_file() {
     
     # 检查上传结果
     if [ ${PIPESTATUS[0]} -eq 0 ]; then
-        info "${description}上传完成"
-        return 0
+        # 验证文件是否成功上传
+        if curl -s -f -X PROPFIND --header "Depth: 0" -u "$user:$pass" "$WEBDAV_FULL_URL/$target" >/dev/null 2>&1; then
+            info "${description}上传完成"
+            return 0
+        else
+            error "${description}上传后验证失败"
+            return 1
+        fi
     else
         error "${description}上传失败"
         return 1
@@ -325,27 +427,6 @@ show_menu() {
     esac
 }
 
-# 显示授权主机列表
-list_hosts() {
-    echo
-    info "授权主机列表："
-    if [ -s "$HOSTS_FILE" ]; then
-        cat "$HOSTS_FILE"
-    else
-        echo "暂无授权主机"
-    fi
-}
-
-# 交互式添加主机
-add_host_interactive() {
-    echo
-    read -p "请输入主机地址: " host
-    read -p "请输入用户名: " user
-    echo "$user@$host" >> "$HOSTS_FILE"
-    info "已添加主机: $user@$host"
-    upload_to_webdav "$WEBDAV_USER" "$WEBDAV_PASS"
-}
-
 # 显示帮助信息
 show_help() {
     echo
@@ -370,6 +451,26 @@ show_help() {
     echo "- 批量部署公钥"
     echo "- 主机连接测试"
     echo "- 授权主机管理"
+}
+
+# 显示授权主机列表
+list_hosts() {
+    echo
+    info "授权主机列表："
+    if [ -f "$HOSTS_FILE" ]; then
+        if [ -s "$HOSTS_FILE" ]; then
+            # 显示主机列表，每行前面加上 "- "
+            while IFS= read -r line; do
+                echo "  - $line"
+            done < "$HOSTS_FILE"
+        else
+            echo "  (空)"
+        fi
+    else
+        echo "  (空)"
+        touch "$HOSTS_FILE"
+        chmod 600 "$HOSTS_FILE"
+    fi
 }
 
 # 主程序

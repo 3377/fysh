@@ -120,6 +120,34 @@ generate_keys() {
     return 0
 }
 
+# 下载文件
+download_file() {
+    local url="$1"
+    local output="$2"
+    local user="$3"
+    local pass="$4"
+
+    # 使用 -L 参数跟随重定向，并检查文件内容
+    if ! curl -s -f -L -o "$output" -u "$user:$pass" "$url"; then
+        error "下载失败: $url"
+        return 1
+    fi
+
+    # 验证文件内容
+    if grep -q "^<!DOCTYPE\|^<html\|^<a href=" "$output"; then
+        error "下载的文件包含HTML内容，可能是重定向页面"
+        return 1
+    fi
+
+    # 确保文件不为空
+    if [ ! -s "$output" ]; then
+        error "下载的文件为空"
+        return 1
+    fi
+
+    return 0
+}
+
 # 从WebDAV下载文件
 download_from_webdav() {
     local user="$1"
@@ -130,24 +158,43 @@ download_from_webdav() {
     info "正在从WebDAV下载文件..."
     
     # 下载私钥
-    if ! download_file "${WEBDAV_FULL_URL}/${KEY_NAME}" "${temp_dir}/${KEY_NAME}" "$user" "$pass"; then
+    if ! curl -s -f -L -o "${temp_dir}/${KEY_NAME}" -u "$user:$pass" "$WEBDAV_FULL_URL/${KEY_NAME}"; then
         error "私钥下载失败"
         rm -rf "$temp_dir"
         return 1
     fi
     
+    # 验证私钥文件
+    if grep -q "^<!DOCTYPE\|^<html\|^<a href=" "${temp_dir}/${KEY_NAME}" || [ ! -s "${temp_dir}/${KEY_NAME}" ]; then
+        error "私钥文件无效"
+        rm -rf "$temp_dir"
+        return 1
+    fi
+    
     # 下载公钥
-    if ! download_file "${WEBDAV_FULL_URL}/${KEY_NAME}.pub" "${temp_dir}/${KEY_NAME}.pub" "$user" "$pass"; then
+    if ! curl -s -f -L -o "${temp_dir}/${KEY_NAME}.pub" -u "$user:$pass" "$WEBDAV_FULL_URL/${KEY_NAME}.pub"; then
         error "公钥下载失败"
         rm -rf "$temp_dir"
         return 1
     fi
     
-    # 下载主机列表
-    if ! download_file "${WEBDAV_FULL_URL}/hosts" "${temp_dir}/hosts" "$user" "$pass"; then
-        error "主机列表下载失败"
+    # 验证公钥文件
+    if grep -q "^<!DOCTYPE\|^<html\|^<a href=" "${temp_dir}/${KEY_NAME}.pub" || [ ! -s "${temp_dir}/${KEY_NAME}.pub" ]; then
+        error "公钥文件无效"
         rm -rf "$temp_dir"
         return 1
+    fi
+    
+    # 下载主机列表
+    if ! curl -s -f -L -o "${temp_dir}/hosts" -u "$user:$pass" "$WEBDAV_FULL_URL/hosts"; then
+        warn "主机列表下载失败，将创建新的列表"
+        touch "${temp_dir}/hosts"
+    else
+        # 验证主机列表文件
+        if grep -q "^<!DOCTYPE\|^<html\|^<a href=" "${temp_dir}/hosts"; then
+            warn "主机列表文件无效，将创建新的列表"
+            : > "${temp_dir}/hosts"
+        fi
     fi
     
     # 如果本地没有密钥，直接使用下载的密钥
@@ -159,11 +206,11 @@ download_from_webdav() {
     fi
     
     # 合并主机列表（增量更新）
-    if [ -f "${temp_dir}/hosts" ]; then
+    if [ -f "${temp_dir}/hosts" ] && [ -s "${temp_dir}/hosts" ]; then
         # 确保本地hosts文件存在
         touch "$HOSTS_FILE"
         # 合并远程主机列表到本地，去除重复项
-        cat "${temp_dir}/hosts" "$HOSTS_FILE" | sort | uniq > "${temp_dir}/hosts_merged"
+        cat "${temp_dir}/hosts" "$HOSTS_FILE" | grep -v "^<!DOCTYPE\|^<html\|^<a href=" | sort | uniq > "${temp_dir}/hosts_merged"
         mv "${temp_dir}/hosts_merged" "$HOSTS_FILE"
         chmod 600 "$HOSTS_FILE"
     fi
@@ -182,15 +229,21 @@ upload_to_webdav() {
     info "准备上传文件到WebDAV..."
     
     # 先下载现有的主机列表
-    if curl -s -f -X PROPFIND --header "Depth: 1" -u "$user:$pass" "$WEBDAV_FULL_URL/hosts" >/dev/null 2>&1; then
+    if curl -s -f -L -X PROPFIND --header "Depth: 1" -u "$user:$pass" "$WEBDAV_FULL_URL/hosts" >/dev/null 2>&1; then
         info "发现现有主机列表，正在合并..."
-        if ! download_file "${WEBDAV_FULL_URL}/hosts" "${temp_dir}/hosts" "$user" "$pass"; then
+        if ! curl -s -f -L -o "${temp_dir}/hosts" -u "$user:$pass" "$WEBDAV_FULL_URL/hosts"; then
             warn "无法下载现有主机列表，将创建新的列表"
             cp "$HOSTS_FILE" "${temp_dir}/hosts"
         else
-            # 合并主机列表（增量更新）
-            cat "$HOSTS_FILE" "${temp_dir}/hosts" | sort | uniq > "${temp_dir}/hosts_merged"
-            mv "${temp_dir}/hosts_merged" "${temp_dir}/hosts"
+            # 验证下载的主机列表
+            if grep -q "^<!DOCTYPE\|^<html\|^<a href=" "${temp_dir}/hosts"; then
+                warn "下载的主机列表无效，将创建新的列表"
+                cp "$HOSTS_FILE" "${temp_dir}/hosts"
+            else
+                # 合并主机列表（增量更新）
+                cat "$HOSTS_FILE" "${temp_dir}/hosts" | sort | uniq > "${temp_dir}/hosts_merged"
+                mv "${temp_dir}/hosts_merged" "${temp_dir}/hosts"
+            fi
         fi
     else
         cp "$HOSTS_FILE" "${temp_dir}/hosts"
@@ -223,20 +276,6 @@ upload_to_webdav() {
     
     rm -rf "$temp_dir"
     success "文件上传完成"
-    return 0
-}
-
-# 下载文件
-download_file() {
-    local url="$1"
-    local output="$2"
-    local user="$3"
-    local pass="$4"
-
-    if ! curl -s -f -o "$output" -u "$user:$pass" "$url"; then
-        error "下载失败: $url"
-        return 1
-    fi
     return 0
 }
 
@@ -375,7 +414,7 @@ main() {
         if [ ! -f "$SSH_DIR/$KEY_NAME" ]; then
             # 检查WebDAV上是否有现有配置
             info "检查WebDAV上的配置..."
-            if curl -s -f -X PROPFIND --header "Depth: 1" -u "$WEBDAV_USER:$WEBDAV_PASS" "$WEBDAV_FULL_URL/${KEY_NAME}" >/dev/null 2>&1; then
+            if curl -s -f -L -X PROPFIND --header "Depth: 1" -u "$WEBDAV_USER:$WEBDAV_PASS" "$WEBDAV_FULL_URL/${KEY_NAME}" >/dev/null 2>&1; then
                 info "发现现有配置，正在下载..."
                 if ! download_from_webdav "$WEBDAV_USER" "$WEBDAV_PASS"; then
                     error "配置下载失败"

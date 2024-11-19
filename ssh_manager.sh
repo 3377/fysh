@@ -15,20 +15,20 @@ WEBDAV_BASE_URL="https://pan.hstz.com"
 WEBDAV_PATH="/dav"
 WEBDAV_FULL_URL="${WEBDAV_BASE_URL}${WEBDAV_PATH}"
 
-# 颜色定义
-RED='\033[0;31m'
+# ANSI颜色代码
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
+RED='\033[0;31m'
 BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
-# 输出信息
+# 日志函数
 info() {
-    echo -e "${GREEN}[INFO]${NC} $1"
+    echo -e "${BLUE}[INFO]${NC} $1"
 }
 
 success() {
-    echo -e "${BLUE}[SUCCESS]${NC} $1"
+    echo -e "${GREEN}[SUCCESS]${NC} $1"
 }
 
 warn() {
@@ -36,7 +36,7 @@ warn() {
 }
 
 error() {
-    echo -e "${RED}[ERROR]${NC} $1" >&2
+    echo -e "${RED}[ERROR]${NC} $1"
 }
 
 # 测试WebDAV连接
@@ -166,6 +166,7 @@ download_from_webdav() {
     local temp_dir
     temp_dir=$(mktemp -d)
     local key_exists=false
+    local need_upload=false
     
     info "正在从WebDAV下载文件..."
     
@@ -204,7 +205,7 @@ download_from_webdav() {
     else
         info "WebDAV上没有有效的密钥，生成新的密钥对..."
         generate_keys
-        info "新密钥对将在后续上传到WebDAV"
+        need_upload=true
     fi
     
     # 下载并合并主机列表
@@ -222,9 +223,20 @@ download_from_webdav() {
         warn "主机列表下载失败或无效，创建新的列表"
         : > "$HOSTS_FILE"
         chmod 600 "$HOSTS_FILE"
+        need_upload=true
     fi
     
     rm -rf "$temp_dir"
+    
+    # 只有在生成新密钥或创建新主机列表时才需要上传
+    if [ "$need_upload" = true ]; then
+        info "上传新生成的配置到WebDAV..."
+        if ! upload_to_webdav "$user" "$pass"; then
+            error "配置上传失败"
+            return 1
+        fi
+    fi
+    
     return 0
 }
 
@@ -343,20 +355,15 @@ authorize_current_host() {
 list_hosts() {
     echo
     info "授权主机列表："
-    if [ -f "$HOSTS_FILE" ]; then
-        if [ -s "$HOSTS_FILE" ]; then
-            # 显示主机列表，每行前面加上 "- "
-            echo "主机名                  授权时间"
-            echo "----------------------------------------"
-            while IFS='|' read -r host timestamp; do
-                printf "%-22s %s\n" "$host" "$timestamp"
-            done < "$HOSTS_FILE"
-        else
-            echo "暂无授权主机"
-        fi
+    if [ -f "$HOSTS_FILE" ] && [ -s "$HOSTS_FILE" ] && ! grep -q "^<!DOCTYPE\|^<html\|^<a href=" "$HOSTS_FILE"; then
+        echo "主机名                  授权时间"
+        echo "----------------------------------------"
+        while IFS='|' read -r host timestamp; do
+            printf "%-22s %s\n" "$host" "$timestamp"
+        done < "$HOSTS_FILE"
     else
         echo "暂无授权主机"
-        touch "$HOSTS_FILE"
+        : > "$HOSTS_FILE"
         chmod 600 "$HOSTS_FILE"
     fi
 }
@@ -502,7 +509,7 @@ configure_sshd() {
     if [ "$(id -u)" -ne 0 ]; then
         error "配置SSHD需要root权限"
         return 1
-    }
+    fi
     
     # 备份原配置文件
     info "备份当前SSH配置..."
@@ -519,7 +526,7 @@ configure_sshd() {
     fi
     
     # 配置AuthorizedKeysFile
-    if ! grep -q "^AuthorizedKeysFile.*\.ssh/authorized_keys" "$sshd_config"; then
+    if ! grep -q "^AuthorizedKeysFile.*authorized_keys" "$sshd_config"; then
         info "配置授权密钥文件路径..."
         # 注释掉所有AuthorizedKeysFile行
         sed -i 's/^AuthorizedKeysFile.*/# &/' "$sshd_config"
@@ -528,25 +535,20 @@ configure_sshd() {
         needs_restart=true
     fi
     
-    # 验证配置
-    if ! sshd -t; then
-        error "SSH配置验证失败，正在恢复备份..."
-        cp "$backup_file" "$sshd_config"
-        return 1
-    fi
-    
-    # 如果需要，重启SSHD服务
+    # 如果需要，重启SSH服务
     if [ "$needs_restart" = true ]; then
-        info "正在重启SSH服务..."
+        info "重启SSH服务..."
         if command -v systemctl >/dev/null 2>&1; then
             systemctl restart sshd
-        elif command -v service >/dev/null 2>&1; then
-            service sshd restart
         else
-            error "无法重启SSH服务，请手动重启"
+            service ssh restart
+        fi
+        if [ $? -eq 0 ]; then
+            success "SSH服务已重启"
+        else
+            error "SSH服务重启失败"
             return 1
         fi
-        success "SSH服务已重启"
     else
         info "SSH配置已是最新，无需重启"
     fi
@@ -554,16 +556,11 @@ configure_sshd() {
     return 0
 }
 
-# 主程序
+# 主程序入口
 main() {
     if [ $# -eq 2 ]; then
         WEBDAV_USER="$1"
         WEBDAV_PASS="$2"
-        
-        # 测试WebDAV连接
-        if ! test_webdav "$WEBDAV_USER" "$WEBDAV_PASS"; then
-            exit 1
-        fi
         
         # 初始化环境
         init_env
@@ -584,10 +581,12 @@ main() {
         # 授权当前主机
         authorize_current_host
         
-        # 上传配置到WebDAV
-        if ! upload_to_webdav "$WEBDAV_USER" "$WEBDAV_PASS"; then
-            error "配置上传失败"
-            exit 1
+        # 上传更新后的主机列表到WebDAV
+        if [ -f "$HOSTS_FILE" ]; then
+            if ! upload_to_webdav "$WEBDAV_USER" "$WEBDAV_PASS"; then
+                error "主机列表上传失败"
+                exit 1
+            fi
         fi
         
         success "初始配置完成"

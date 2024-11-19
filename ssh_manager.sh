@@ -156,6 +156,7 @@ download_from_webdav() {
     local user="$1"
     local pass="$2"
     local need_upload=false
+    local key_exists=false
     
     info "正在从WebDAV下载文件..."
     
@@ -163,7 +164,6 @@ download_from_webdav() {
     if ! curl -s -k -I -u "$user:$pass" "$WEBDAV_FULL_URL" | grep -q "HTTP.*2"; then
         info "WebDAV目录不存在，将在上传时创建"
         need_upload=true
-        return 1
     fi
     
     # 下载私钥
@@ -176,20 +176,28 @@ download_from_webdav() {
             if ssh-keygen -l -f "$SSH_DIR/$KEY_NAME" > /dev/null 2>&1; then
                 info "成功下载有效的密钥对"
                 info "使用WebDAV上的现有密钥"
+                key_exists=true
             else
                 warn "下载的密钥对无效，需要生成新的密钥对"
                 need_upload=true
-                return 1
             fi
         else
             warn "公钥下载失败，需要生成新的密钥对"
             need_upload=true
-            return 1
         fi
     else
         info "WebDAV上不存在密钥，需要生成新的密钥对"
         need_upload=true
-        return 1
+    fi
+
+    # 如果没有有效的密钥，生成新的
+    if [ "$key_exists" = false ]; then
+        info "生成新的密钥对..."
+        if ! generate_keys; then
+            error "生成密钥对失败"
+            return 1
+        fi
+        need_upload=true
     fi
     
     # 下载主机列表
@@ -197,7 +205,18 @@ download_from_webdav() {
         info "下载到现有主机列表，进行合并..."
     else
         warn "主机列表下载失败，将创建新的主机列表"
+        : > "$HOSTS_FILE"
+        chmod 600 "$HOSTS_FILE"
         need_upload=true
+    fi
+
+    # 如果需要上传，执行上传操作
+    if [ "$need_upload" = true ]; then
+        info "上传新生成的配置到WebDAV..."
+        if ! upload_to_webdav "$user" "$pass"; then
+            error "配置上传失败"
+            return 1
+        fi
     fi
     
     return 0

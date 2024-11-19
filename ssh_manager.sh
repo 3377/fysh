@@ -429,33 +429,49 @@ handle_menu() {
         echo "=== SSH Manager 菜单 ==="
         echo "1. 查看授权主机列表"
         echo "2. 从WebDAV同步"
-        echo "3. 查看帮助信息"
-        echo "4. 退出"
+        echo "3. 上传授权列表到WebDAV"
+        echo "4. 查看帮助信息"
+        echo "0. 退出程序"
         echo "===================="
         
-        read -p "请选择操作 [1-4]: " choice
+        read -p "请选择操作 [0-4]: " choice
         
         case $choice in
             1)
                 echo
-                show_feature_help "hosts"
-                echo
-                list_hosts
+                if ! list_hosts; then
+                    error "查看授权主机列表失败"
+                    return 1
+                fi
                 ;;
             2)
                 echo
-                show_feature_help "sync"
-                echo
+                info "从WebDAV同步..."
+                if [ -z "$WEBDAV_USER" ] || [ -z "$WEBDAV_PASS" ]; then
+                    error "WebDAV凭据未设置"
+                    return 1
+                fi
                 if download_from_webdav "$WEBDAV_USER" "$WEBDAV_PASS"; then
                     success "文件已成功从WebDAV同步"
                 fi
                 ;;
             3)
-                echo
-                show_feature_help "help"
+                info "上传授权列表到WebDAV..."
+                if [ -z "$WEBDAV_USER" ] || [ -z "$WEBDAV_PASS" ]; then
+                    error "WebDAV凭据未设置"
+                    return 1
+                fi
+                if ! upload_hosts_to_webdav "$WEBDAV_USER" "$WEBDAV_PASS"; then
+                    error "授权列表上传失败"
+                    return 1
+                fi
                 ;;
             4)
-                echo "退出程序"
+                echo
+                show_help
+                ;;
+            0)
+                info "退出程序"
                 exit 0
                 ;;
             *)
@@ -463,6 +479,34 @@ handle_menu() {
                 ;;
         esac
     done
+}
+
+# 上传授权列表到WebDAV
+upload_hosts_to_webdav() {
+    local user="$1"
+    local pass="$2"
+    
+    info "正在上传授权列表到WebDAV..."
+    
+    # 检查主机列表文件是否存在
+    if [ ! -f "$HOSTS_FILE" ]; then
+        error "授权列表文件不存在"
+        return 1
+    fi
+    
+    # 确保目标目录存在
+    if ! curl -s -k -X MKCOL -u "$user:$pass" "$WEBDAV_FULL_URL" > /dev/null 2>&1; then
+        warn "创建WebDAV目录失败，目录可能已存在"
+    fi
+    
+    # 上传主机列表
+    if curl -s -k -T "$HOSTS_FILE" -u "$user:$pass" "$WEBDAV_FULL_URL/hosts"; then
+        success "授权列表上传成功"
+        return 0
+    else
+        error "授权列表上传失败"
+        return 1
+    fi
 }
 
 # 显示帮助信息

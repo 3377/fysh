@@ -12,7 +12,7 @@ TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
 
 # WebDAV配置
 WEBDAV_BASE_URL="https://pan.hstz.com"
-WEBDAV_PATH="/dav"
+WEBDAV_PATH="/dav/ssh_manager"
 WEBDAV_FULL_URL="${WEBDAV_BASE_URL}${WEBDAV_PATH}"
 
 # ANSI颜色代码
@@ -134,107 +134,70 @@ generate_keys() {
 # 下载文件
 download_file() {
     local url="$1"
-    local output="$2"
+    local output_file="$2"
     local user="$3"
     local pass="$4"
 
-    # 使用 -L 参数跟随重定向，并检查文件内容
-    if ! curl -s -f -L -o "$output" -u "$user:$pass" "$url"; then
-        error "下载失败: $url"
+    # 使用curl下载文件
+    local response
+    response=$(curl -s -k -w "%{http_code}" -u "$user:$pass" -o "$output_file" "$url")
+    
+    # 检查HTTP状态码
+    if [ "$response" = "200" ] || [ "$response" = "201" ]; then
+        return 0
+    else
+        warn "下载失败，HTTP状态码: $response"
         return 1
     fi
-
-    # 验证文件内容
-    if grep -q "^<!DOCTYPE\|^<html\|^<a href=" "$output"; then
-        error "下载的文件包含HTML内容，可能是重定向页面"
-        return 1
-    fi
-
-    # 确保文件不为空
-    if [ ! -s "$output" ]; then
-        error "下载的文件为空"
-        return 1
-    fi
-
-    return 0
 }
 
 # 从WebDAV下载文件
 download_from_webdav() {
     local user="$1"
     local pass="$2"
-    local temp_dir
-    temp_dir=$(mktemp -d)
-    local key_exists=false
     local need_upload=false
     
     info "正在从WebDAV下载文件..."
     
-    # 检查WebDAV上是否存在密钥
-    if curl -s -f -I -u "$user:$pass" "$WEBDAV_FULL_URL/${KEY_NAME}" >/dev/null 2>&1; then
+    # 检查目录是否存在
+    if ! curl -s -k -I -u "$user:$pass" "$WEBDAV_FULL_URL" | grep -q "HTTP.*2"; then
+        info "WebDAV目录不存在，将在上传时创建"
+        need_upload=true
+        return 1
+    fi
+    
+    # 下载私钥
+    if download_file "$WEBDAV_FULL_URL/$KEY_NAME" "$SSH_DIR/$KEY_NAME" "$user" "$pass"; then
         info "WebDAV上存在密钥，正在下载..."
         
-        # 下载私钥
-        if curl -s -f -L -o "${temp_dir}/${KEY_NAME}" -u "$user:$pass" "$WEBDAV_FULL_URL/${KEY_NAME}" && \
-           ! grep -q "^<!DOCTYPE\|^<html\|^<a href=" "${temp_dir}/${KEY_NAME}" && \
-           [ -s "${temp_dir}/${KEY_NAME}" ]; then
-            
-            # 下载公钥
-            if curl -s -f -L -o "${temp_dir}/${KEY_NAME}.pub" -u "$user:$pass" "$WEBDAV_FULL_URL/${KEY_NAME}.pub" && \
-               ! grep -q "^<!DOCTYPE\|^<html\|^<a href=" "${temp_dir}/${KEY_NAME}.pub" && \
-               [ -s "${temp_dir}/${KEY_NAME}.pub" ]; then
-                
-                # 验证密钥对的有效性
-                chmod 600 "${temp_dir}/${KEY_NAME}"
-                if ssh-keygen -l -f "${temp_dir}/${KEY_NAME}" >/dev/null 2>&1; then
-                    key_exists=true
-                    info "成功下载有效的密钥对"
-                else
-                    warn "下载的密钥对无效"
-                fi
+        # 下载公钥
+        if download_file "$WEBDAV_FULL_URL/${KEY_NAME}.pub" "$SSH_DIR/${KEY_NAME}.pub" "$user" "$pass"; then
+            # 验证密钥对
+            if ssh-keygen -l -f "$SSH_DIR/$KEY_NAME" > /dev/null 2>&1; then
+                info "成功下载有效的密钥对"
+                info "使用WebDAV上的现有密钥"
+            else
+                warn "下载的密钥对无效，需要生成新的密钥对"
+                need_upload=true
+                return 1
             fi
-        fi
-    fi
-
-    if [ "$key_exists" = true ]; then
-        info "使用WebDAV上的现有密钥"
-        mv "${temp_dir}/${KEY_NAME}" "$SSH_DIR/$KEY_NAME"
-        mv "${temp_dir}/${KEY_NAME}.pub" "$SSH_DIR/${KEY_NAME}.pub"
-        chmod 600 "$SSH_DIR/$KEY_NAME"
-        chmod 644 "$SSH_DIR/${KEY_NAME}.pub"
-    else
-        info "WebDAV上没有有效的密钥，生成新的密钥对..."
-        generate_keys
-        need_upload=true
-    fi
-    
-    # 下载并合并主机列表
-    if curl -s -f -L -o "${temp_dir}/hosts" -u "$user:$pass" "$WEBDAV_FULL_URL/hosts" && \
-       ! grep -q "^<!DOCTYPE\|^<html\|^<a href=" "${temp_dir}/hosts" && \
-       [ -s "${temp_dir}/hosts" ]; then
-        info "下载到现有主机列表，进行合并..."
-        # 创建临时主机列表
-        touch "$HOSTS_FILE"
-        # 合并现有列表和新列表，去除重复项（按主机名去重，保留最新时间戳）
-        cat "${temp_dir}/hosts" "$HOSTS_FILE" | sort -t'|' -k1,1 -u > "${temp_dir}/hosts_merged"
-        mv "${temp_dir}/hosts_merged" "$HOSTS_FILE"
-        chmod 600 "$HOSTS_FILE"
-    else
-        warn "主机列表下载失败或无效，创建新的列表"
-        : > "$HOSTS_FILE"
-        chmod 600 "$HOSTS_FILE"
-        need_upload=true
-    fi
-    
-    rm -rf "$temp_dir"
-    
-    # 只有在生成新密钥或创建新主机列表时才需要上传
-    if [ "$need_upload" = true ]; then
-        info "上传新生成的配置到WebDAV..."
-        if ! upload_to_webdav "$user" "$pass"; then
-            error "配置上传失败"
+        else
+            warn "公钥下载失败，需要生成新的密钥对"
+            need_upload=true
             return 1
         fi
+    else
+        info "WebDAV上不存在密钥，需要生成新的密钥对"
+        need_upload=true
+        return 1
+    fi
+    
+    # 下载主机列表
+    if download_file "$WEBDAV_FULL_URL/hosts" "$HOSTS_FILE" "$user" "$pass"; then
+        info "下载到现有主机列表，进行合并..."
+    else
+        warn "主机列表下载失败，将创建新的主机列表"
+        need_upload=true
     fi
     
     return 0
@@ -247,9 +210,14 @@ upload_to_webdav() {
     
     info "正在上传文件到WebDAV..."
     
+    # 确保目标目录存在
+    if ! curl -s -k -X MKCOL -u "$user:$pass" "$WEBDAV_FULL_URL" > /dev/null 2>&1; then
+        warn "创建WebDAV目录失败，目录可能已存在"
+    fi
+    
     # 上传私钥（如果本地存在）
     if [ -f "$SSH_DIR/$KEY_NAME" ]; then
-        if ! curl -s -f -T "$SSH_DIR/$KEY_NAME" -u "$user:$pass" "$WEBDAV_FULL_URL/${KEY_NAME}"; then
+        if ! curl -s -k -T "$SSH_DIR/$KEY_NAME" -u "$user:$pass" "$WEBDAV_FULL_URL/${KEY_NAME}"; then
             error "私钥上传失败"
             return 1
         fi
@@ -257,7 +225,7 @@ upload_to_webdav() {
     
     # 上传公钥（如果本地存在）
     if [ -f "$SSH_DIR/${KEY_NAME}.pub" ]; then
-        if ! curl -s -f -T "$SSH_DIR/${KEY_NAME}.pub" -u "$user:$pass" "$WEBDAV_FULL_URL/${KEY_NAME}.pub"; then
+        if ! curl -s -k -T "$SSH_DIR/${KEY_NAME}.pub" -u "$user:$pass" "$WEBDAV_FULL_URL/${KEY_NAME}.pub"; then
             error "公钥上传失败"
             return 1
         fi
@@ -265,7 +233,7 @@ upload_to_webdav() {
     
     # 上传主机列表
     if [ -f "$HOSTS_FILE" ]; then
-        if ! curl -s -f -T "$HOSTS_FILE" -u "$user:$pass" "$WEBDAV_FULL_URL/hosts"; then
+        if ! curl -s -k -T "$HOSTS_FILE" -u "$user:$pass" "$WEBDAV_FULL_URL/hosts"; then
             error "主机列表上传失败"
             return 1
         fi

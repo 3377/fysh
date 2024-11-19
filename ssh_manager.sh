@@ -93,6 +93,19 @@ init_config() {
     chmod 600 "$HOSTS_FILE"
 }
 
+# 初始化环境
+init_env() {
+    info "初始化环境..."
+    
+    # 创建必要的目录
+    mkdir -p "$SSH_MANAGER_DIR"
+    chmod 700 "$SSH_MANAGER_DIR"
+    
+    # 确保hosts文件存在
+    touch "$HOSTS_FILE"
+    chmod 600 "$HOSTS_FILE"
+}
+
 # 生成新的SSH密钥对
 generate_keys() {
     info "生成新的SSH密钥对..."
@@ -543,7 +556,6 @@ configure_sshd() {
 
 # 主程序
 main() {
-    # 检查参数
     if [ $# -eq 2 ]; then
         WEBDAV_USER="$1"
         WEBDAV_PASS="$2"
@@ -553,16 +565,19 @@ main() {
             exit 1
         fi
         
-        # 清理现有配置
-        clean_local_config
-        
-        # 初始化新的配置目录
-        init_config
+        # 初始化环境
+        init_env
         
         # 从WebDAV下载配置
-        info "从WebDAV同步配置..."
+        info "从WebDAV下载配置..."
         if ! download_from_webdav "$WEBDAV_USER" "$WEBDAV_PASS"; then
-            error "配置同步失败"
+            error "配置下载失败"
+            exit 1
+        fi
+        
+        # 配置SSHD
+        if ! configure_sshd; then
+            error "SSHD配置失败"
             exit 1
         fi
         
@@ -575,6 +590,8 @@ main() {
             exit 1
         fi
         
+        success "初始配置完成"
+        
         # 显示交互式菜单
         handle_menu
     else
@@ -583,4 +600,5 @@ main() {
     fi
 }
 
+# 执行主程序
 main "$@"

@@ -138,13 +138,27 @@ download_file() {
     local user="$3"
     local pass="$4"
 
-    # 使用curl下载文件
+    # 使用curl下载文件，添加-L参数处理重定向
     local response
-    response=$(curl -s -k -w "%{http_code}" -u "$user:$pass" -o "$output_file" "$url")
+    response=$(curl -s -k -L -w "%{http_code}" -u "$user:$pass" -o "$output_file" "$url")
     
     # 检查HTTP状态码
     if [ "$response" = "200" ] || [ "$response" = "201" ]; then
-        return 0
+        # 验证文件是否下载成功
+        if [ -s "$output_file" ]; then
+            # 检查文件内容是否是HTML（可能是错误页面）
+            if ! grep -q "^<!DOCTYPE\|^<html\|^<a href=" "$output_file"; then
+                return 0
+            else
+                warn "下载的文件包含HTML内容，可能是错误页面"
+                rm -f "$output_file"
+                return 1
+            fi
+        else
+            warn "下载的文件为空"
+            rm -f "$output_file"
+            return 1
+        fi
     else
         warn "下载失败，HTTP状态码: $response"
         return 1
@@ -160,22 +174,32 @@ download_from_webdav() {
     
     info "正在从WebDAV下载文件..."
     
-    # 检查目录是否存在
-    if ! curl -s -k -I -u "$user:$pass" "$WEBDAV_FULL_URL" | grep -q "HTTP.*2"; then
+    # 检查目录是否存在，使用-L参数处理重定向
+    if ! curl -s -k -L -I -u "$user:$pass" "$WEBDAV_FULL_URL" | grep -q "HTTP/.*[[:space:]]2"; then
         info "WebDAV目录不存在，将在上传时创建"
         need_upload=true
     fi
     
-    # 下载私钥
-    if download_file "$WEBDAV_FULL_URL/$KEY_NAME" "$SSH_DIR/$KEY_NAME" "$user" "$pass"; then
+    # 创建临时目录用于验证下载的文件
+    local temp_dir
+    temp_dir=$(mktemp -d)
+    
+    # 下载私钥到临时目录
+    if download_file "$WEBDAV_FULL_URL/$KEY_NAME" "${temp_dir}/${KEY_NAME}" "$user" "$pass"; then
         info "WebDAV上存在密钥，正在下载..."
         
-        # 下载公钥
-        if download_file "$WEBDAV_FULL_URL/${KEY_NAME}.pub" "$SSH_DIR/${KEY_NAME}.pub" "$user" "$pass"; then
+        # 下载公钥到临时目录
+        if download_file "$WEBDAV_FULL_URL/${KEY_NAME}.pub" "${temp_dir}/${KEY_NAME}.pub" "$user" "$pass"; then
             # 验证密钥对
-            if ssh-keygen -l -f "$SSH_DIR/$KEY_NAME" > /dev/null 2>&1; then
+            chmod 600 "${temp_dir}/${KEY_NAME}"
+            if ssh-keygen -l -f "${temp_dir}/${KEY_NAME}" > /dev/null 2>&1; then
                 info "成功下载有效的密钥对"
                 info "使用WebDAV上的现有密钥"
+                # 移动验证过的密钥到最终位置
+                mv "${temp_dir}/${KEY_NAME}" "$SSH_DIR/$KEY_NAME"
+                mv "${temp_dir}/${KEY_NAME}.pub" "$SSH_DIR/${KEY_NAME}.pub"
+                chmod 600 "$SSH_DIR/$KEY_NAME"
+                chmod 644 "$SSH_DIR/${KEY_NAME}.pub"
                 key_exists=true
             else
                 warn "下载的密钥对无效，需要生成新的密钥对"
@@ -189,6 +213,9 @@ download_from_webdav() {
         info "WebDAV上不存在密钥，需要生成新的密钥对"
         need_upload=true
     fi
+
+    # 清理临时目录
+    rm -rf "$temp_dir"
 
     # 如果没有有效的密钥，生成新的
     if [ "$key_exists" = false ]; then

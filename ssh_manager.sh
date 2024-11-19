@@ -161,6 +161,7 @@ download_from_webdav() {
                [ -s "${temp_dir}/${KEY_NAME}.pub" ]; then
                 
                 # 验证密钥对的有效性
+                chmod 600 "${temp_dir}/${KEY_NAME}"
                 if ssh-keygen -l -f "${temp_dir}/${KEY_NAME}" >/dev/null 2>&1; then
                     key_exists=true
                     info "成功下载有效的密钥对"
@@ -171,7 +172,6 @@ download_from_webdav() {
         fi
     fi
 
-    # 处理密钥
     if [ "$key_exists" = true ]; then
         info "使用WebDAV上的现有密钥"
         mv "${temp_dir}/${KEY_NAME}" "$SSH_DIR/$KEY_NAME"
@@ -179,21 +179,21 @@ download_from_webdav() {
         chmod 600 "$SSH_DIR/$KEY_NAME"
         chmod 644 "$SSH_DIR/${KEY_NAME}.pub"
     else
-        if [ -f "$SSH_DIR/$KEY_NAME" ] && [ -f "$SSH_DIR/${KEY_NAME}.pub" ]; then
-            warn "WebDAV上没有有效的密钥，但本地存在密钥，将上传本地密钥"
-        else
-            info "WebDAV上没有密钥，生成新的密钥对..."
-            generate_keys
-            info "新密钥对将在后续上传到WebDAV"
-        fi
+        info "WebDAV上没有有效的密钥，生成新的密钥对..."
+        generate_keys
+        info "新密钥对将在后续上传到WebDAV"
     fi
     
-    # 下载主机列表
+    # 下载并合并主机列表
     if curl -s -f -L -o "${temp_dir}/hosts" -u "$user:$pass" "$WEBDAV_FULL_URL/hosts" && \
        ! grep -q "^<!DOCTYPE\|^<html\|^<a href=" "${temp_dir}/hosts" && \
        [ -s "${temp_dir}/hosts" ]; then
-        info "合并主机列表..."
-        mv "${temp_dir}/hosts" "$HOSTS_FILE"
+        info "下载到现有主机列表，进行合并..."
+        # 创建临时主机列表
+        touch "$HOSTS_FILE"
+        # 合并现有列表和新列表，去除重复项
+        cat "${temp_dir}/hosts" "$HOSTS_FILE" | sort | uniq > "${temp_dir}/hosts_merged"
+        mv "${temp_dir}/hosts_merged" "$HOSTS_FILE"
         chmod 600 "$HOSTS_FILE"
     else
         warn "主机列表下载失败或无效，创建新的列表"
@@ -242,13 +242,30 @@ upload_to_webdav() {
 
 # 授权当前主机
 authorize_current_host() {
-    local pub_key
-    pub_key=$(cat "$SSH_DIR/${KEY_NAME}.pub")
-    if ! grep -q "$pub_key" "$HOSTS_FILE"; then
-        echo "$pub_key" >> "$HOSTS_FILE"
-        success "已授权当前主机: $CURRENT_HOST"
+    local hostname
+    hostname=$(hostname)
+    
+    # 检查主机是否已经在列表中
+    if grep -q "^${hostname}$" "$HOSTS_FILE"; then
+        info "主机 ${hostname} 已在授权列表中"
     else
-        warn "当前主机已经被授权"
+        # 添加新主机到列表
+        echo "$hostname" >> "$HOSTS_FILE"
+        # 对主机列表去重
+        sort -u "$HOSTS_FILE" -o "$HOSTS_FILE"
+        success "已授权当前主机: ${hostname}"
+    fi
+    
+    # 确保authorized_keys文件存在
+    local auth_keys="$HOME/.ssh/authorized_keys"
+    mkdir -p "$HOME/.ssh"
+    touch "$auth_keys"
+    chmod 700 "$HOME/.ssh"
+    chmod 600 "$auth_keys"
+    
+    # 添加公钥到authorized_keys（如果不存在）
+    if ! grep -q "$(cat "$SSH_DIR/${KEY_NAME}.pub")" "$auth_keys"; then
+        cat "$SSH_DIR/${KEY_NAME}.pub" >> "$auth_keys"
     fi
 }
 

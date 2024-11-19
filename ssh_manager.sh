@@ -201,8 +201,8 @@ download_from_webdav() {
         info "下载到现有主机列表，进行合并..."
         # 创建临时主机列表
         touch "$HOSTS_FILE"
-        # 合并现有列表和新列表，去除重复项
-        cat "${temp_dir}/hosts" "$HOSTS_FILE" | sort | uniq > "${temp_dir}/hosts_merged"
+        # 合并现有列表和新列表，去除重复项（按主机名去重，保留最新时间戳）
+        cat "${temp_dir}/hosts" "$HOSTS_FILE" | sort -t'|' -k1,1 -u > "${temp_dir}/hosts_merged"
         mv "${temp_dir}/hosts_merged" "$HOSTS_FILE"
         chmod 600 "$HOSTS_FILE"
     else
@@ -254,16 +254,19 @@ upload_to_webdav() {
 authorize_current_host() {
     local hostname
     hostname=$(hostname)
+    local timestamp
+    # 使用date命令获取北京时间
+    timestamp=$(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M:%S')
     
     # 检查主机是否已经在列表中
-    if grep -q "^${hostname}$" "$HOSTS_FILE"; then
+    if grep -q "^${hostname}|" "$HOSTS_FILE"; then
         info "主机 ${hostname} 已在授权列表中"
     else
-        # 添加新主机到列表
-        echo "$hostname" >> "$HOSTS_FILE"
-        # 对主机列表去重
-        sort -u "$HOSTS_FILE" -o "$HOSTS_FILE"
-        success "已授权当前主机: ${hostname}"
+        # 添加新主机到列表（带时间戳）
+        echo "${hostname}|${timestamp}" >> "$HOSTS_FILE"
+        # 对主机列表去重，保留最新的记录
+        sort -t'|' -k1,1 -u "$HOSTS_FILE" -o "$HOSTS_FILE"
+        success "已授权当前主机: ${hostname} (${timestamp})"
     fi
     
     # 确保.ssh目录和authorized_keys文件存在且权限正确
@@ -310,41 +313,17 @@ authorize_current_host() {
         return 1
     fi
     
-    # 验证 sshd 配置
+    # 配置SSHD
     if [ -f "/etc/ssh/sshd_config" ]; then
-        # 确保允许公钥认证
-        if ! grep -q "^PubkeyAuthentication yes" "/etc/ssh/sshd_config"; then
-            warn "建议在 sshd_config 中启用 PubkeyAuthentication"
-        fi
-        
-        # 检查 AuthorizedKeysFile 设置
-        if ! grep -q "^AuthorizedKeysFile.*\.ssh/authorized_keys" "/etc/ssh/sshd_config"; then
-            warn "建议检查 sshd_config 中的 AuthorizedKeysFile 设置"
+        if configure_sshd; then
+            success "SSH服务配置完成"
+        else
+            warn "SSH服务配置失败，可能需要手动配置"
         fi
     fi
     
     info "SSH密钥授权配置完成"
     return 0
-}
-
-# 批量授权主机
-batch_authorize_hosts() {
-    local hosts_file="$1"
-    if [ ! -f "$hosts_file" ]; then
-        error "主机列表文件不存在: $hosts_file"
-        return 1
-    fi
-
-    while IFS= read -r host; do
-        if [ -n "$host" ]; then
-            if ! grep -q "$host" "$HOSTS_FILE"; then
-                echo "$host" >> "$HOSTS_FILE"
-                success "已授权主机: $host"
-            else
-                warn "主机已经被授权: $host"
-            fi
-        fi
-    done < "$hosts_file"
 }
 
 # 显示授权主机列表
@@ -354,65 +333,99 @@ list_hosts() {
     if [ -f "$HOSTS_FILE" ]; then
         if [ -s "$HOSTS_FILE" ]; then
             # 显示主机列表，每行前面加上 "- "
-            while IFS= read -r line; do
-                echo "  - $line"
+            echo "主机名                  授权时间"
+            echo "----------------------------------------"
+            while IFS='|' read -r host timestamp; do
+                printf "%-22s %s\n" "$host" "$timestamp"
             done < "$HOSTS_FILE"
         else
-            echo "  (空)"
+            echo "暂无授权主机"
         fi
     else
-        echo "  (空)"
+        echo "暂无授权主机"
         touch "$HOSTS_FILE"
         chmod 600 "$HOSTS_FILE"
     fi
 }
 
-# 显示菜单
-show_menu() {
-    echo -e "\n${BLUE}=== SSH Manager 菜单 ===${NC}"
-    echo "1) 查看授权主机列表"
-    echo "2) 授权当前主机"
-    echo "3) 批量授权主机"
-    echo "4) 同步到WebDAV"
-    echo "5) 从WebDAV同步"
-    echo "6) 退出"
-    echo -e "${YELLOW}请选择操作 [1-6]:${NC} "
+# 显示功能帮助信息
+show_feature_help() {
+    local feature="$1"
+    case $feature in
+        "sync")
+            echo "从WebDAV同步功能说明："
+            echo "此功能用于从WebDAV服务器同步SSH密钥和主机授权列表。"
+            echo
+            echo "主要步骤："
+            echo "1. 检查并下载WebDAV上的SSH密钥"
+            echo "2. 验证密钥的有效性"
+            echo "3. 同步主机授权列表"
+            echo
+            echo "注意事项："
+            echo "- 确保WebDAV服务器可访问"
+            echo "- 需要正确的用户名和密码"
+            echo "- 同步过程中不会删除本地已有的授权"
+            ;;
+        "hosts")
+            echo "授权主机列表功能说明："
+            echo "此功能显示所有已授权的主机及其授权时间。"
+            echo
+            echo "显示信息："
+            echo "- 主机名"
+            echo "- 授权时间（北京时间）"
+            echo
+            echo "注意事项："
+            echo "- 时间戳格式：YYYY-MM-DD HH:MM:SS"
+            echo "- 列表按主机名排序"
+            echo "- 重复授权会更新时间戳"
+            ;;
+        "help")
+            show_help
+            ;;
+        *)
+            error "未知的功能选项"
+            ;;
+    esac
 }
 
 # 处理菜单选择
 handle_menu() {
-    local choice
     while true; do
-        show_menu
-        read -r choice
+        echo
+        echo "=== SSH Manager 菜单 ==="
+        echo "1. 查看授权主机列表"
+        echo "2. 从WebDAV同步"
+        echo "3. 查看帮助信息"
+        echo "4. 退出"
+        echo "===================="
+        
+        read -p "请选择操作 [1-4]: " choice
+        
         case $choice in
             1)
+                echo
+                show_feature_help "hosts"
+                echo
                 list_hosts
                 ;;
             2)
-                authorize_current_host
+                echo
+                show_feature_help "sync"
+                echo
+                if download_from_webdav "$WEBDAV_USER" "$WEBDAV_PASS"; then
+                    success "文件已成功从WebDAV同步"
+                fi
                 ;;
             3)
-                echo -e "${YELLOW}请输入主机列表文件路径:${NC} "
-                read -r hosts_file
-                batch_authorize_hosts "$hosts_file"
+                echo
+                show_feature_help "help"
                 ;;
             4)
-                if upload_to_webdav "$WEBDAV_USER" "$WEBDAV_PASS"; then
-                    success "文件已成功上传到WebDAV"
-                fi
-                ;;
-            5)
-                if download_from_webdav "$WEBDAV_USER" "$WEBDAV_PASS"; then
-                    success "文件已成功从WebDAV下载"
-                fi
-                ;;
-            6)
-                success "感谢使用！"
+                echo "退出程序"
                 exit 0
                 ;;
             *)
-                warn "无效的选择，请重试"
+                error "无效的选择"
                 ;;
         esac
     done
@@ -420,15 +433,112 @@ handle_menu() {
 
 # 显示帮助信息
 show_help() {
-    echo "SSH Key Manager - 帮助信息"
-    echo "用法: $0 <用户名> <密码>"
+    echo "SSH Manager - SSH密钥管理工具 v2.0.0"
     echo
-    echo "功能:"
-    echo "- 生成SSH密钥对"
-    echo "- WebDAV同步"
-    echo "- 批量部署公钥"
-    echo "- 主机连接测试"
-    echo "- 授权主机管理"
+    echo "使用方法: $0 <WebDAV用户名> <WebDAV密码>"
+    echo
+    echo "功能说明："
+    echo "本工具用于管理多台服务器之间的SSH密钥同步和授权，通过WebDAV实现配置集中管理。"
+    echo
+    echo "主要功能："
+    echo "1. 自动同步SSH密钥配置"
+    echo "  - 从WebDAV获取统一的SSH密钥"
+    echo "  - 自动配置本地SSH环境"
+    echo "  - 确保所有服务器使用相同的密钥"
+    echo
+    echo "2. 自动授权管理"
+    echo "  - 自动将当前主机添加到授权列表"
+    echo "  - 维护带时间戳的主机授权记录"
+    echo "  - 自动配置SSH服务"
+    echo
+    echo "3. 安全特性"
+    echo "  - 自动设置正确的文件权限"
+    echo "  - 配置文件自动备份"
+    echo "  - 严格的密钥验证"
+    echo
+    echo "使用注意事项："
+    echo "1. 首次使用："
+    echo "  - 需要在第一台服务器上运行以初始化密钥"
+    echo "  - 之后所有服务器将使用相同的密钥"
+    echo
+    echo "2. 权限要求："
+    echo "  - 配置SSH服务需要root权限"
+    echo "  - 建议使用root用户运行"
+    echo
+    echo "3. 文件位置："
+    echo "  - 配置文件存储在: ~/.ssh_manager/"
+    echo "  - SSH密钥存储在: ~/.ssh/"
+    echo
+    echo "4. WebDAV要求："
+    echo "  - 需要可用的WebDAV服务器"
+    echo "  - WebDAV服务器需要读写权限"
+    echo
+    echo "示例："
+    echo "  $0 webdav_user webdav_password"
+    echo
+    echo "注意：请确保WebDAV服务器的安全性，因为它存储着重要的SSH配置。"
+}
+
+# 配置SSHD
+configure_sshd() {
+    local sshd_config="/etc/ssh/sshd_config"
+    local needs_restart=false
+    local backup_file="${sshd_config}.backup.$(date +%Y%m%d_%H%M%S)"
+    
+    # 检查是否有root权限
+    if [ "$(id -u)" -ne 0 ]; then
+        error "配置SSHD需要root权限"
+        return 1
+    }
+    
+    # 备份原配置文件
+    info "备份当前SSH配置..."
+    cp "$sshd_config" "$backup_file"
+    
+    # 配置PubkeyAuthentication
+    if ! grep -q "^PubkeyAuthentication yes" "$sshd_config"; then
+        info "启用公钥认证..."
+        # 注释掉所有PubkeyAuthentication行
+        sed -i 's/^PubkeyAuthentication.*/# &/' "$sshd_config"
+        # 添加新的配置
+        echo "PubkeyAuthentication yes" >> "$sshd_config"
+        needs_restart=true
+    fi
+    
+    # 配置AuthorizedKeysFile
+    if ! grep -q "^AuthorizedKeysFile.*\.ssh/authorized_keys" "$sshd_config"; then
+        info "配置授权密钥文件路径..."
+        # 注释掉所有AuthorizedKeysFile行
+        sed -i 's/^AuthorizedKeysFile.*/# &/' "$sshd_config"
+        # 添加新的配置
+        echo "AuthorizedKeysFile .ssh/authorized_keys" >> "$sshd_config"
+        needs_restart=true
+    fi
+    
+    # 验证配置
+    if ! sshd -t; then
+        error "SSH配置验证失败，正在恢复备份..."
+        cp "$backup_file" "$sshd_config"
+        return 1
+    fi
+    
+    # 如果需要，重启SSHD服务
+    if [ "$needs_restart" = true ]; then
+        info "正在重启SSH服务..."
+        if command -v systemctl >/dev/null 2>&1; then
+            systemctl restart sshd
+        elif command -v service >/dev/null 2>&1; then
+            service sshd restart
+        else
+            error "无法重启SSH服务，请手动重启"
+            return 1
+        fi
+        success "SSH服务已重启"
+    else
+        info "SSH配置已是最新，无需重启"
+    fi
+    
+    return 0
 }
 
 # 主程序
@@ -459,14 +569,11 @@ main() {
         # 授权当前主机
         authorize_current_host
         
-        # 上传更新后的配置到WebDAV
-        info "上传更新后的配置到WebDAV..."
+        # 上传配置到WebDAV
         if ! upload_to_webdav "$WEBDAV_USER" "$WEBDAV_PASS"; then
             error "配置上传失败"
             exit 1
         fi
-        
-        success "初始配置完成"
         
         # 显示交互式菜单
         handle_menu

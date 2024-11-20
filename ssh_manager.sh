@@ -704,6 +704,80 @@
         echo "$port"
     }
 
+    # 获取远程主机公网IP
+    get_remote_public_ip() {
+        local ip=""
+        # 使用多个IP查询服务
+        ip=$(curl -s https://api.ipify.org 2>/dev/null) || \
+        ip=$(curl -s http://checkip.amazonaws.com 2>/dev/null) || \
+        ip=$(curl -s https://api.ip.sb/ip 2>/dev/null) || \
+        ip=$(curl -s https://ipinfo.io/ip 2>/dev/null)
+        
+        if [ -n "$ip" ]; then
+            echo "$ip"
+            return 0
+        fi
+        return 1
+    }
+
+    # 测试主机SSH连接
+    test_ssh_connection() {
+        local host="$1"
+        local port="$2"
+        local ip="$3"
+        local test_time
+        test_time="$(date '+%Y-%m-%d %H:%M:%S')"
+        
+        if [ -z "$ip" ] || [ -z "$port" ]; then
+            error "无效的IP地址或端口: $host"
+            echo ""
+            return 1
+        fi
+        
+        info "测试连接 $host (${ip}:${port})..."
+        
+        # 使用ssh命令测试连接
+        if ssh -i "$SSH_DIR/$KEY_NAME" -o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=5 -p "$port" "root@$ip" "echo 'Connection successful'" >/dev/null 2>&1; then
+            success "连接成功: $host (${ip}:${port})"
+            echo "$test_time"
+            return 0
+        else
+            error "连接失败: $host (${ip}:${port})"
+            echo ""
+            return 1
+        fi
+    }
+
+    # 授权当前主机（仅在新主机首次运行时调用）
+    authorize_current_host() {
+        local hostname
+        local public_ip
+        local ssh_port
+        local current_time
+        
+        hostname=$(hostname)
+        if ! public_ip=$(get_remote_public_ip); then
+            error "无法获取公网IP地址"
+            return 1
+        fi
+        
+        if ! ssh_port=$(get_ssh_port); then
+            error "无法获取SSH端口"
+            return 1
+        fi
+        
+        current_time=$(date "+%Y-%m-%d %H:%M:%S")
+        
+        # 更新主机记录
+        if ! merge_host_record "$hostname" "$current_time" "$public_ip" "$ssh_port"; then
+            error "更新主机记录失败"
+            return 1
+        fi
+        
+        success "已更新当前主机 $hostname 的授权信息"
+        return 0
+    }
+
     # 显示功能帮助信息
     show_feature_help() {
         local feature="$1"
@@ -823,52 +897,21 @@
                 source "$CONFIG_FILE"
                 if [ -n "$WEBDAV_USER" ] && [ -n "$WEBDAV_PASS" ]; then
                     info "使用已保存的WebDAV配置"
-                    # 配置SSHD
-                    if ! configure_sshd; then
-                        error "SSHD配置失败"
+                    # 从WebDAV下载最新的主机列表
+                    if ! download_from_webdav "$WEBDAV_USER" "$WEBDAV_PASS"; then
+                        error "从WebDAV下载配置失败"
                         exit 1
                     fi
-                    # 测试WebDAV连接
-                    if test_webdav "$WEBDAV_USER" "$WEBDAV_PASS"; then
-                        handle_menu
-                    else
-                        error "WebDAV连接测试失败，请检查配置"
-                        exit 1
-                    fi
+                    handle_menu
                 else
                     error "未找到WebDAV配置信息"
                     show_help
                     exit 1
                 fi
             else
-                # 尝试从环境变量读取配置
-                if [ -n "$WEBDAV_USER" ] && [ -n "$WEBDAV_PASS" ]; then
-                    info "使用环境变量中的WebDAV配置"
-                    # 保存配置到文件
-                    mkdir -p "$(dirname "$CONFIG_FILE")"
-                    echo "WEBDAV_USER='$WEBDAV_USER'" > "$CONFIG_FILE"
-                    echo "WEBDAV_PASS='$WEBDAV_PASS'" >> "$CONFIG_FILE"
-                    chmod 600 "$CONFIG_FILE"
-                    
-                    # 配置SSHD
-                    if ! configure_sshd; then
-                        error "SSHD配置失败"
-                        exit 1
-                    fi
-                    
-                    # 测试WebDAV连接
-                    if test_webdav "$WEBDAV_USER" "$WEBDAV_PASS"; then
-                        handle_menu
-                    else
-                        error "WebDAV连接测试失败，请检查配置"
-                        rm -f "$CONFIG_FILE"
-                        exit 1
-                    fi
-                else
-                    error "未找到配置文件，请先使用用户名和密码参数运行脚本进行初始化"
-                    show_help
-                    exit 1
-                fi
+                error "未找到配置文件，请先使用用户名和密码参数运行脚本进行初始化"
+                show_help
+                exit 1
             fi
         elif [ $# -eq 2 ]; then
             WEBDAV_USER="$1"
@@ -889,21 +932,23 @@
             # 初始化环境
             init_env
             
-            # 从WebDAV下载配置
-            info "从WebDAV下载配置..."
-            if ! download_from_webdav "$WEBDAV_USER" "$WEBDAV_PASS"; then
-                error "配置下载失败"
-                exit 1
-            fi
-            
             # 配置SSHD
             if ! configure_sshd; then
                 error "SSHD配置失败"
                 exit 1
             fi
             
+            # 从WebDAV下载配置
+            info "从WebDAV下载配置..."
+            if ! download_from_webdav "$WEBDAV_USER" "$WEBDAV_PASS"; then
+                warn "从WebDAV下载配置失败，将创建新的配置"
+            fi
+            
             # 授权当前主机
-            authorize_current_host
+            if ! authorize_current_host; then
+                error "授权当前主机失败"
+                exit 1
+            fi
             
             # 上传更新后的主机列表到WebDAV
             if [ -f "$HOSTS_FILE" ]; then

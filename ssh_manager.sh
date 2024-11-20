@@ -469,7 +469,7 @@
         info "授权主机列表："
         if [ -f "$HOSTS_FILE" ] && [ -s "$HOSTS_FILE" ] && ! grep -q "^<!DOCTYPE\|^<html\|^<a href=" "$HOSTS_FILE"; then
             # 检查是否需要更新主机记录格式
-            if ! grep -q "|.*|.*|" "$HOSTS_FILE"; then
+            if ! grep -q "|.*|.*|.*|" "$HOSTS_FILE"; then
                 info "更新主机记录格式..."
                 update_host_format
             fi
@@ -494,304 +494,64 @@
         fi
     }
 
-    # 显示功能帮助信息
-    show_feature_help() {
-        local feature="$1"
-        case $feature in
-            "sync")
-                echo "从WebDAV同步功能说明："
-                echo "此功能用于从WebDAV服务器同步SSH密钥和主机授权列表。"
-                echo
-                echo "主要步骤："
-                echo "1. 检查并下载WebDAV上的SSH密钥"
-                echo "2. 验证密钥的有效性"
-                echo "3. 同步主机授权列表"
-                echo
-                echo "注意事项："
-                echo "- 确保WebDAV服务器可访问"
-                echo "- 需要正确的用户名和密码"
-                echo "- 同步过程中不会删除本地已有的授权"
-                ;;
-            "hosts")
-                echo "授权主机列表功能说明："
-                echo "此功能显示所有已授权的主机及其授权时间。"
-                echo
-                echo "显示信息："
-                echo "- 主机名"
-                echo "- 授权时间（北京时间）"
-                echo
-                echo "注意事项："
-                echo "- 时间戳格式：YYYY-MM-DD HH:MM:SS"
-                echo "- 列表按主机名排序"
-                echo "- 重复授权会更新时间戳"
-                ;;
-            "help")
-                show_help
-                ;;
-            *)
-                error "未知的功能选项"
-                ;;
-        esac
-    }
-
-    # 处理菜单选择
-    handle_menu() {
-        while true; do
-            echo
-            echo "=== SSH Manager 菜单 ==="
-            echo "1. 查看授权主机列表"
-            echo "2. 从WebDAV同步"
-            echo "3. 上传授权列表到WebDAV"
-            echo "4. 查看帮助信息"
-            echo "0. 退出程序并清除配置"
-            echo "===================="
-            
-            read -p "请选择操作 [0-4]: " choice
-            
-            case $choice in
-                1)
-                    echo
-                    if ! list_hosts; then
-                        error "查看授权主机列表失败"
-                        return 1
-                    fi
-                    ;;
-                2)
-                    echo
-                    info "从WebDAV同步..."
-                    if [ -z "$WEBDAV_USER" ] || [ -z "$WEBDAV_PASS" ]; then
-                        error "WebDAV凭据未设置"
-                        return 1
-                    fi
-                    if download_from_webdav "$WEBDAV_USER" "$WEBDAV_PASS"; then
-                        success "文件已成功从WebDAV同步"
-                    fi
-                    ;;
-                3)
-                    info "上传授权列表到WebDAV..."
-                    if [ -z "$WEBDAV_USER" ] || [ -z "$WEBDAV_PASS" ]; then
-                        error "WebDAV凭据未设置"
-                        return 1
-                    fi
-                    if ! upload_to_webdav "$WEBDAV_USER" "$WEBDAV_PASS"; then
-                        error "授权列表上传失败"
-                        return 1
-                    fi
-                    ;;
-                4)
-                    echo
-                    show_help
-                    ;;
-                0)
-                    echo "退出程序..."
-                    # 删除配置文件以保护凭据安全
-                    if [ -f "$CONFIG_FILE" ]; then
-                        rm -f "$CONFIG_FILE"
-                        echo "已清除配置文件"
-                    fi
-                    exit 0
-                    ;;
-                *)
-                    error "无效的选择"
-                    ;;
-            esac
-        done
-    }
-
-    # 上传授权列表到WebDAV
-    upload_hosts_to_webdav() {
-        local user="$1"
-        local pass="$2"
-        
-        info "正在上传授权列表到WebDAV..."
-        
-        # 检查主机列表文件是否存在
-        if [ ! -f "$HOSTS_FILE" ]; then
-            error "授权列表文件不存在"
-            return 1
-        fi
-        
-        # 确保目标目录存在
-        if ! curl -s -k -X MKCOL -u "$user:$pass" "$WEBDAV_FULL_URL" > /dev/null 2>&1; then
-            warn "创建WebDAV目录失败，目录可能已存在"
-        fi
-        
-        local upload_failed=false
-        
-        # 检查WebDAV上是否已存在主机列表文件
-        if ! curl -s -k -I -u "$user:$pass" "$WEBDAV_FULL_URL/hosts" | grep -q "HTTP/.*[[:space:]]2"; then
-            info "WebDAV上不存在主机列表，准备上传..."
-            # 上传主机列表
-            if [ -f "$HOSTS_FILE" ]; then
-                if ! curl -s -k -T "$HOSTS_FILE" -u "$user:$pass" "$WEBDAV_FULL_URL/hosts"; then
-                    error "主机列表上传失败"
-                    upload_failed=true
-                else
-                    success "主机列表上传成功"
-                fi
-            fi
-        else
-            info "WebDAV上已存在主机列表，跳过上传"
-        fi
-        
-        if [ "$upload_failed" = true ]; then
-            return 1
-        fi
-        
-        return 0
-    }
-
-    # 显示帮助信息
-    show_help() {
-        echo "SSH Manager - SSH密钥管理工具 v2.0.0"
-        echo
-        echo "使用方法: $0 [WebDAV用户名 WebDAV密码]"
-        echo
-        echo "功能说明："
-        echo "本工具用于管理多台服务器之间的SSH密钥同步和授权，通过WebDAV实现配置集中管理。"
-        echo
-        echo "主要功能："
-        echo "1. 自动同步SSH密钥配置"
-        echo "  - 从WebDAV获取统一的SSH密钥"
-        echo "  - 自动配置本地SSH环境"
-        echo "  - 确保所有服务器使用相同的密钥"
-        echo
-        echo "2. 自动授权管理"
-        echo "  - 自动将当前主机添加到授权列表"
-        echo "  - 维护带时间戳的主机授权记录"
-        echo "  - 自动配置SSH服务"
-        echo
-        echo "3. 安全特性"
-        echo "  - 自动设置正确的文件权限"
-        echo "  - 配置文件自动备份"
-        echo "  - 严格的密钥验证"
-        echo
-        echo "使用注意事项："
-        echo "1. 首次使用："
-        echo "  - 需要在第一台服务器上运行以初始化密钥"
-        echo "  - 之后所有服务器将使用相同的密钥"
-        echo
-        echo "2. 权限要求："
-        echo "  - 配置SSH服务需要root权限"
-        echo "  - 建议使用root用户运行"
-        echo
-        echo "3. 文件位置："
-        echo "  - 配置文件存储在: ~/.ssh_manager/"
-        echo "  - SSH密钥存储在: ~/.ssh/"
-        echo
-        echo "4. WebDAV要求："
-        echo "  - 需要可用的WebDAV服务器"
-        echo "  - WebDAV服务器需要读写权限"
-        echo
-        echo "示例："
-        echo "  $0 webdav_user webdav_password"
-        echo
-    }
-
-    # 配置SSHD
-    configure_sshd() {
-        local sshd_config="/etc/ssh/sshd_config"
-        local needs_restart=false
-        local backup_file="${sshd_config}.backup.$(date +%Y%m%d_%H%M%S)"
-        
-        # 检查是否有root权限
-        if [ "$(id -u)" -ne 0 ]; then
-            error "配置SSHD需要root权限"
-            return 1
-        fi
-        
-        # 备份原配置文件
-        info "备份当前SSH配置..."
-        cp "$sshd_config" "$backup_file"
-        
-        # 配置PubkeyAuthentication
-        if ! grep -q "^PubkeyAuthentication yes" "$sshd_config"; then
-            info "启用公钥认证..."
-            # 注释掉所有PubkeyAuthentication行
-            sed -i 's/^PubkeyAuthentication.*/# &/' "$sshd_config"
-            # 添加新的配置
-            echo "PubkeyAuthentication yes" >> "$sshd_config"
-            needs_restart=true
-        fi
-        
-        # 配置AuthorizedKeysFile
-        if ! grep -q "^AuthorizedKeysFile.*authorized_keys" "$sshd_config"; then
-            info "配置授权密钥文件路径..."
-            # 注释掉所有AuthorizedKeysFile行
-            sed -i 's/^AuthorizedKeysFile.*/# &/' "$sshd_config"
-            # 添加新的配置
-            echo "AuthorizedKeysFile .ssh/authorized_keys" >> "$sshd_config"
-            needs_restart=true
-        fi
-        
-        # 如果需要，重启SSH服务
-        if [ "$needs_restart" = true ]; then
-            info "重启SSH服务..."
-            if command -v systemctl >/dev/null 2>&1; then
-                systemctl restart sshd
-            else
-                service ssh restart
-            fi
-            if [ $? -eq 0 ]; then
-                success "SSH服务已重启"
-            else
-                error "SSH服务重启失败"
-                return 1
-            fi
-        else
-            info "SSH配置已是最新，无需重启"
-        fi
-        
-        return 0
-    }
-
-    # 获取公网IP
-    get_public_ip() {
-        local ip
-        ip=$(curl -s ip.sb)
-        if [ -n "$ip" ]; then
-            echo "$ip"
-            return 0
-        else
-            error "无法获取公网IP"
-            return 1
-        fi
-    }
-
     # 测试主机SSH连接
     test_ssh_connection() {
         local host="$1"
         local port="$2"
         local ip="$3"
+        local test_time
+        test_time="$(date '+%Y-%m-%d %H:%M:%S')"
         
         info "测试连接 $host (${ip}:${port})..."
         
         # 使用-o BatchMode=yes避免密码提示
         if ssh -i "$SSH_DIR/$KEY_NAME" -o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=5 -p "$port" "root@$ip" "echo 'Connection successful'" >/dev/null 2>&1; then
             success "连接成功: $host (${ip}:${port})"
+            echo "$test_time"
             return 0
         else
             error "连接失败: $host (${ip}:${port})"
+            echo ""
             return 1
         fi
     }
 
-    # 获取SSH端口
-    get_ssh_port() {
-        local port
-        # 检查sshd_config文件中的Port配置
-        if [ -f "/etc/ssh/sshd_config" ]; then
-            port=$(grep "^Port" "/etc/ssh/sshd_config" | awk '{print $2}')
+    # 合并主机记录
+    merge_host_record() {
+        local host="$1"
+        local timestamp="$2"
+        local ip="$3"
+        local port="$4"
+        local temp_file="${HOSTS_FILE}.tmp"
+        local found=false
+        local test_time=""
+        
+        # 测试连接并获取测试时间
+        test_time=$(test_ssh_connection "$host" "$port" "$ip")
+        
+        : > "$temp_file"
+        
+        # 读取现有记录，查找匹配的主机
+        while IFS='|' read -r existing_host existing_timestamp existing_ip existing_port existing_test_time; do
+            if [ -n "$existing_host" ]; then
+                if [ "$existing_host" = "$host" ]; then
+                    # 找到匹配的主机，使用新的IP和最新的测试时间
+                    echo "${host}|${timestamp}|${ip}|${port}|${test_time}" >> "$temp_file"
+                    found=true
+                else
+                    # 保留其他主机的记录
+                    echo "${existing_host}|${existing_timestamp}|${existing_ip}|${existing_port}|${existing_test_time}" >> "$temp_file"
+                fi
+            fi
+        done < "$HOSTS_FILE"
+        
+        # 如果是新主机，添加到列表
+        if [ "$found" = false ]; then
+            echo "${host}|${timestamp}|${ip}|${port}|${test_time}" >> "$temp_file"
         fi
-        # 如果没有找到Port配置，尝试从netstat获取
-        if [ -z "$port" ]; then
-            port=$(netstat -tlpn | grep "sshd" | grep "LISTEN" | awk '{split($4,a,":"); print a[length(a)]}' | head -n 1)
-        fi
-        # 如果仍然没有找到，使用默认端口22
-        if [ -z "$port" ]; then
-            port="22"
-        fi
-        echo "$port"
+        
+        mv "$temp_file" "$HOSTS_FILE"
+        chmod 600 "$HOSTS_FILE"
     }
 
     # 更新主机记录格式
@@ -803,10 +563,11 @@
             if [ -n "$host" ]; then
                 if [[ "$rest" != *"|"* ]]; then
                     # 旧格式，需要更新
-                    local ip port
+                    local ip port test_time
                     ip=$(curl -s ip.sb)
-                    port=$(get_ssh_port)  # 获取实际的SSH端口
-                    echo "${host}|${timestamp}|${ip}|${port}" >> "$temp_file"
+                    port=$(get_ssh_port)
+                    test_time=$(test_ssh_connection "$host" "$port" "$ip")
+                    echo "${host}|${timestamp}|${ip}|${port}|${test_time}" >> "$temp_file"
                 else
                     # 新格式，保持不变
                     echo "${host}|${timestamp}|${rest}" >> "$temp_file"
@@ -818,26 +579,143 @@
         chmod 600 "$HOSTS_FILE"
     }
 
+    # 显示授权主机列表
+    list_hosts() {
+        echo
+        info "授权主机列表："
+        if [ -f "$HOSTS_FILE" ] && [ -s "$HOSTS_FILE" ] && ! grep -q "^<!DOCTYPE\|^<html\|^<a href=" "$HOSTS_FILE"; then
+            # 检查是否需要更新主机记录格式
+            if ! grep -q "|.*|.*|.*|" "$HOSTS_FILE"; then
+                info "更新主机记录格式..."
+                update_host_format
+            fi
+            
+            printf "%-20s %-15s %-6s %-19s %-19s %-10s\n" "主机名" "公网IP" "端口" "授权时间" "最后测试时间" "连接状态"
+            echo "--------------------------------------------------------------------------------------------------------"
+            while IFS='|' read -r host timestamp ip port test_time; do
+                if [ -n "$host" ]; then
+                    # 测试连接状态
+                    if test_ssh_connection "$host" "$port" "$ip" >/dev/null 2>&1; then
+                        status="${GREEN}在线${NC}"
+                    else
+                        status="${RED}离线${NC}"
+                    fi
+                    printf "%-20s %-15s %-6s %-19s %-19s %-10b\n" "$host" "$ip" "$port" "$timestamp" "${test_time:-N/A}" "$status"
+                fi
+            done < "$HOSTS_FILE"
+        else
+            echo "暂无授权主机"
+            : > "$HOSTS_FILE"
+            chmod 600 "$HOSTS_FILE"
+        fi
+    }
+
     # 授权当前主机
     authorize_current_host() {
         local timestamp
         timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
         local ip port
         ip=$(get_public_ip)
-        port=$(get_ssh_port)  # 获取实际的SSH端口
+        port=$(get_ssh_port)
         
-        # 检查主机是否已经授权
-        if grep -q "^${CURRENT_HOST}|" "$HOSTS_FILE"; then
-            warn "当前主机 ${CURRENT_HOST} 已在授权列表中"
-            return 1
-        fi
-        
-        # 添加新主机到授权列表
-        echo "${CURRENT_HOST}|${timestamp}|${ip}|${port}" >> "$HOSTS_FILE"
-        chmod 600 "$HOSTS_FILE"
-        success "已将当前主机 ${CURRENT_HOST} 添加到授权列表"
+        # 使用合并函数来处理主机记录
+        merge_host_record "${CURRENT_HOST}" "$timestamp" "$ip" "$port"
+        success "已更新当前主机 ${CURRENT_HOST} 的授权信息"
         
         return 0
+    }
+
+    # 测试所有主机连通性
+    test_all_connections() {
+        info "开始测试所有主机的连通性..."
+        local temp_file="${HOSTS_FILE}.tmp"
+        : > "$temp_file"
+        
+        while IFS='|' read -r host timestamp ip port test_time; do
+            if [ -n "$host" ]; then
+                local new_test_time
+                new_test_time=$(test_ssh_connection "$host" "$port" "$ip")
+                echo "${host}|${timestamp}|${ip}|${port}|${new_test_time}" >> "$temp_file"
+            fi
+        done < "$HOSTS_FILE"
+        
+        mv "$temp_file" "$HOSTS_FILE"
+        chmod 600 "$HOSTS_FILE"
+        success "连通性测试完成"
+    }
+
+    # 显示功能帮助信息
+    show_feature_help() {
+        local feature="$1"
+        case $feature in
+            "test")
+                echo "测试主机连通性功能说明："
+                echo "此功能用于测试所有授权主机的SSH连接状态。"
+                echo
+                echo "主要步骤："
+                echo "1. 对每个授权主机进行SSH连接测试"
+                echo "2. 更新每个主机的最后测试时间"
+                echo "3. 显示测试结果"
+                ;;
+            {{ ... }}
+        esac
+    }
+
+    # 处理菜单选择
+    handle_menu() {
+        while true; do
+            echo
+            echo "请选择操作："
+            echo "1) 授权当前主机"
+            echo "2) 查看授权主机列表"
+            echo "3) 从WebDAV同步"
+            echo "4) 上传授权列表到WebDAV"
+            echo "5) 测试所有主机连通性"
+            echo "6) 帮助"
+            echo "0) 退出"
+            echo
+            read -r -p "请输入选项编号: " choice
+            
+            case $choice in
+                1)
+                    authorize_current_host
+                    ;;
+                2)
+                    list_hosts
+                    ;;
+                3)
+                    if [ -f "$CONFIG_FILE" ]; then
+                        source "$CONFIG_FILE"
+                        download_from_webdav "$WEBDAV_USER" "$WEBDAV_PASS"
+                    else
+                        error "未找到配置文件"
+                    fi
+                    ;;
+                4)
+                    if [ -f "$CONFIG_FILE" ]; then
+                        source "$CONFIG_FILE"
+                        upload_hosts_to_webdav "$WEBDAV_USER" "$WEBDAV_PASS"
+                    else
+                        error "未找到配置文件"
+                    fi
+                    ;;
+                5)
+                    test_all_connections
+                    list_hosts
+                    ;;
+                6)
+                    show_help
+                    ;;
+                0)
+                    info "正在退出..."
+                    rm -f "$CONFIG_FILE"
+                    exit 0
+                    ;;
+                *)
+                    error "无效的选项"
+                    ;;
+            esac
+        done
     }
 
     # 主程序入口

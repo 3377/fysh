@@ -506,7 +506,7 @@ handle_menu() {
         echo "2. 从WebDAV同步"
         echo "3. 上传授权列表到WebDAV"
         echo "4. 查看帮助信息"
-        echo "0. 退出程序"
+        echo "0. 退出程序并清除配置"
         echo "===================="
         
         read -p "请选择操作 [0-4]: " choice
@@ -546,7 +546,12 @@ handle_menu() {
                 show_help
                 ;;
             0)
-                info "退出程序"
+                echo "退出程序..."
+                # 删除配置文件以保护凭据安全
+                if [ -f "$CONFIG_FILE" ]; then
+                    rm -f "$CONFIG_FILE"
+                    echo "已清除配置文件"
+                fi
                 exit 0
                 ;;
             *)

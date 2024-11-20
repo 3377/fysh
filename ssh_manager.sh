@@ -157,7 +157,7 @@
 
         # 使用curl下载文件，添加-L参数处理重定向
         local response
-        response=$(curl -s -k -L -w "%{http_code}" -u "$user:$pass" -o "$output_file" "$url")
+        response=$(curl -s -k -L -w "%{http_code}" -u "$user:$pass" -o "$output_file" "$url" --create-dirs)
         
         # 检查HTTP状态码
         if [ "$response" = "200" ] || [ "$response" = "201" ]; then
@@ -192,7 +192,7 @@
         info "正在从WebDAV下载文件..."
         
         # 检查目录是否存在
-        if ! curl -s -k -L -I -u "$user:$pass" "$WEBDAV_FULL_URL" | grep -q "HTTP/.*[[:space:]]2"; then
+        if ! curl -s -k -L -I -u "$user:$pass" "$WEBDAV_FULL_URL/" | grep -q "HTTP/.*[[:space:]]2"; then
             info "WebDAV目录不存在，将在上传时创建"
             need_upload=true
         fi
@@ -275,20 +275,20 @@
         info "正在上传文件到WebDAV..."
         
         # 确保目标目录存在
-        if ! curl -s -k -X MKCOL -u "$user:$pass" "$WEBDAV_FULL_URL" > /dev/null 2>&1; then
+        if ! curl -s -k -X MKCOL -u "$user:$pass" "${WEBDAV_FULL_URL}/" > /dev/null 2>&1; then
             warn "创建WebDAV目录失败，目录可能已存在"
         fi
         
         local upload_failed=false
         
         # 检查WebDAV上是否已存在密钥文件
-        if ! curl -s -k -I -u "$user:$pass" "$WEBDAV_FULL_URL/$KEY_NAME" | grep -q "HTTP/.*[[:space:]]2"; then
+        if ! curl -s -k -I -u "$user:$pass" "${WEBDAV_FULL_URL}/${KEY_NAME}" | grep -q "HTTP/.*[[:space:]]2"; then
             info "WebDAV上不存在密钥，准备上传..."
             # 上传密钥文件
             if [ -f "$SSH_DIR/$KEY_NAME" ]; then
                 info "上传SSH密钥..."
-                if ! curl -s -k -T "$SSH_DIR/$KEY_NAME" -u "$user:$pass" "$WEBDAV_FULL_URL/$KEY_NAME" || \
-                ! curl -s -k -T "$SSH_DIR/${KEY_NAME}.pub" -u "$user:$pass" "$WEBDAV_FULL_URL/${KEY_NAME}.pub"; then
+                if ! curl -s -k -T "$SSH_DIR/$KEY_NAME" -u "$user:$pass" "${WEBDAV_FULL_URL}/${KEY_NAME}" || \
+                ! curl -s -k -T "$SSH_DIR/${KEY_NAME}.pub" -u "$user:$pass" "${WEBDAV_FULL_URL}/${KEY_NAME}.pub"; then
                     error "SSH密钥上传失败"
                     upload_failed=true
                 else
@@ -302,10 +302,10 @@
         # 上传hosts文件前先删除现有文件
         if [ -f "$HOSTS_FILE" ]; then
             info "删除WebDAV上的现有hosts文件..."
-            curl -s -k -X DELETE -u "$user:$pass" "$WEBDAV_FULL_URL/hosts.md" > /dev/null 2>&1
+            curl -s -k -X DELETE -u "$user:$pass" "${WEBDAV_FULL_URL}/hosts.md" > /dev/null 2>&1
             
             info "上传新的hosts文件..."
-            if ! curl -s -k -T "$HOSTS_FILE" -u "$user:$pass" "$WEBDAV_FULL_URL/hosts.md"; then
+            if ! curl -s -k -T "$HOSTS_FILE" -u "$user:$pass" "${WEBDAV_FULL_URL}/hosts.md"; then
                 error "hosts文件上传失败"
                 upload_failed=true
             else

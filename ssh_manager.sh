@@ -433,89 +433,111 @@
 
     # 合并主机记录
     merge_host_record() {
-        local host="$1"
-        local timestamp="$2"
-        local ip="$3"
-        local port="$4"
+        local current_host="$1"
+        local current_time="$2"
+        local current_ip="$3"
+        local current_port="$4"
         local temp_file="${HOSTS_FILE}.tmp"
         local found=false
-        local test_time=""
         
-        # 测试连接并获取测试时间
-        test_time=$(test_ssh_connection "$host" "$port" "$ip")
-        
+        # 创建临时文件
         : > "$temp_file"
         
-        # 读取现有记录，查找匹配的主机
-        while IFS='|' read -r existing_host existing_timestamp existing_ip existing_port existing_test_time; do
-            if [ -n "$existing_host" ]; then
-                if [ "$existing_host" = "$host" ]; then
-                    # 找到匹配的主机，使用新的IP和最新的测试时间
-                    echo "${host}|${timestamp}|${ip}|${port}|${test_time}" >> "$temp_file"
-                    found=true
-                else
-                    # 保留其他主机的记录
-                    echo "${existing_host}|${existing_timestamp}|${existing_ip}|${existing_port}|${existing_test_time}" >> "$temp_file"
-                fi
-            fi
-        done < "$HOSTS_FILE"
-        
-        # 如果是新主机，添加到列表
-        if [ "$found" = false ]; then
-            echo "${host}|${timestamp}|${ip}|${port}|${test_time}" >> "$temp_file"
+        # 如果主机列表文件不存在，创建新文件
+        if [ ! -f "$HOSTS_FILE" ]; then
+            touch "$HOSTS_FILE"
+            chmod 600 "$HOSTS_FILE"
         fi
         
-        mv "$temp_file" "$HOSTS_FILE"
-        chmod 600 "$HOSTS_FILE"
-    }
-
-    # 更新主机记录格式
-    update_host_format() {
-        local temp_file="${HOSTS_FILE}.tmp"
-        : > "$temp_file"
-        
-        while IFS='|' read -r host timestamp rest; do
+        # 更新或添加主机记录
+        while IFS='|' read -r host timestamp ip port last_test || [ -n "$host" ]; do
             if [ -n "$host" ]; then
-                if [[ "$rest" != *"|"* ]]; then
-                    # 旧格式，需要更新
-                    local ip port test_time
-                    ip=$(curl -s ip.sb)
-                    port=$(get_ssh_port)
-                    test_time=$(test_ssh_connection "$host" "$port" "$ip")
-                    echo "${host}|${timestamp}|${ip}|${port}|${test_time}" >> "$temp_file"
+                if [ "$host" = "$current_host" ]; then
+                    # 更新现有记录
+                    echo "${current_host}|${current_time}|${current_ip}|${current_port}|${current_time}" >> "$temp_file"
+                    found=true
+                    info "更新当前主机的时间戳: $current_host"
                 else
-                    # 新格式，保持不变
-                    echo "${host}|${timestamp}|${rest}" >> "$temp_file"
+                    # 保留其他主机记录
+                    echo "${host}|${timestamp}|${ip}|${port}|${last_test}" >> "$temp_file"
                 fi
             fi
         done < "$HOSTS_FILE"
         
+        # 如果是新主机，添加新记录
+        if [ "$found" = false ]; then
+            echo "${current_host}|${current_time}|${current_ip}|${current_port}|${current_time}" >> "$temp_file"
+            info "添加新主机记录: $current_host"
+        fi
+        
+        # 显示更新后的内容
+        info "当前主机列表内容："
+        cat "$temp_file"
+        
+        # 替换原文件
         mv "$temp_file" "$HOSTS_FILE"
         chmod 600 "$HOSTS_FILE"
+        
+        return 0
+    }
+
+    # 授权当前主机
+    authorize_current_host() {
+        local hostname
+        local public_ip
+        local ssh_port
+        local current_time
+        
+        hostname=$(hostname)
+        if ! public_ip=$(get_public_ip); then
+            error "无法获取IP地址"
+            return 1
+        fi
+        
+        if ! ssh_port=$(get_ssh_port); then
+            error "无法获取SSH端口"
+            return 1
+        fi
+        
+        current_time=$(date "+%Y-%m-%d %H:%M:%S")
+        
+        # 更新主机记录
+        if ! merge_host_record "$hostname" "$current_time" "$public_ip" "$ssh_port"; then
+            error "更新主机记录失败"
+            return 1
+        fi
+        
+        success "已更新当前主机 $hostname 的授权信息"
+        return 0
     }
 
     # 显示授权主机列表
     list_hosts() {
         echo
         info "授权主机列表："
-        if [ -f "$HOSTS_FILE" ] && [ -s "$HOSTS_FILE" ] && ! grep -q "^<!DOCTYPE\|^<html\|^<a href=" "$HOSTS_FILE"; then
-            # 检查是否需要更新主机记录格式
-            if ! grep -q "|.*|.*|.*|" "$HOSTS_FILE"; then
-                info "更新主机记录格式..."
-                update_host_format
-            fi
+        if [ -f "$HOSTS_FILE" ] && [ -s "$HOSTS_FILE" ]; then
+            printf "%-20s %-15s %-6s %-19s %-19s %-10s\n" "主机名" "公网IP" "端口" "授权时间" "最后测试时间" "状态"
+            echo "------------------------------------------------------------------------------"
             
-            printf "%-20s %-15s %-6s %-19s %-19s %-10s\n" "主机名" "公网IP" "端口" "授权时间" "最后测试时间" "连接状态"
-            echo "--------------------------------------------------------------------------------------------------------"
-            while IFS='|' read -r host timestamp ip port test_time; do
+            while IFS='|' read -r host timestamp ip port last_test || [ -n "$host" ]; do
                 if [ -n "$host" ]; then
                     # 测试连接状态
-                    if test_ssh_connection "$host" "$port" "$ip" >/dev/null 2>&1; then
-                        status="${GREEN}在线${NC}"
+                    if [ -n "$ip" ] && [ -n "$port" ]; then
+                        if nc -z -w 5 "$ip" "$port" >/dev/null 2>&1; then
+                            status="${GREEN}在线${NC}"
+                        else
+                            status="${RED}离线${NC}"
+                        fi
                     else
-                        status="${RED}离线${NC}"
+                        status="${YELLOW}未知${NC}"
                     fi
-                    printf "%-20s %-15s %-6s %-19s %-19s %-10b\n" "$host" "$ip" "$port" "$timestamp" "${test_time:-N/A}" "$status"
+                    
+                    # 如果时间戳为空，使用"-"代替
+                    [ -z "$timestamp" ] && timestamp="-"
+                    [ -z "$last_test" ] && last_test="-"
+                    
+                    printf "%-20s %-15s %-6s %-19s %-19s %-10s\n" \
+                        "$host" "${ip:--}" "${port:--}" "$timestamp" "$last_test" "$status"
                 fi
             done < "$HOSTS_FILE"
         else
@@ -533,10 +555,16 @@
         local test_time
         test_time="$(date '+%Y-%m-%d %H:%M:%S')"
         
+        if [ -z "$ip" ] || [ -z "$port" ]; then
+            error "无效的IP地址或端口: $host"
+            echo ""
+            return 1
+        fi
+        
         info "测试连接 $host (${ip}:${port})..."
         
-        # 使用-o BatchMode=yes避免密码提示
-        if ssh -i "$SSH_DIR/$KEY_NAME" -o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=5 -p "$port" "root@$ip" "echo 'Connection successful'" >/dev/null 2>&1; then
+        # 使用nc命令测试端口连通性
+        if nc -z -w 5 "$ip" "$port" >/dev/null 2>&1; then
             success "连接成功: $host (${ip}:${port})"
             echo "$test_time"
             return 0
@@ -547,35 +575,125 @@
         fi
     }
 
+    # 配置SSHD
+    configure_sshd() {
+        local sshd_config="/etc/ssh/sshd_config"
+        local needs_restart=false
+        local backup_file="${sshd_config}.backup.$(date +%Y%m%d_%H%M%S)"
+        
+        # 检查是否有root权限
+        if [ "$(id -u)" -ne 0 ]; then
+            if command -v sudo >/dev/null 2>&1; then
+                info "使用sudo获取权限..."
+            else
+                error "需要root权限且系统未安装sudo"
+                return 1
+            fi
+        fi
+        
+        # 备份原配置文件
+        info "备份当前SSH配置..."
+        if [ -f "$sshd_config" ]; then
+            if ! sudo cp "$sshd_config" "$backup_file" 2>/dev/null; then
+                error "无法创建配置文件备份"
+                return 1
+            fi
+            info "已创建SSH配置备份：$backup_file"
+        else
+            error "找不到SSH配置文件：$sshd_config"
+            return 1
+        fi
+        
+        # 配置PubkeyAuthentication
+        if ! sudo grep -q "^PubkeyAuthentication yes" "$sshd_config" 2>/dev/null; then
+            info "启用公钥认证..."
+            sudo sed -i 's/^#*PubkeyAuthentication.*/PubkeyAuthentication yes/' "$sshd_config" 2>/dev/null
+            needs_restart=true
+        fi
+        
+        # 配置AuthorizedKeysFile
+        if ! sudo grep -q "^AuthorizedKeysFile.*authorized_keys" "$sshd_config" 2>/dev/null; then
+            info "配置授权密钥文件路径..."
+            sudo sed -i 's/^#*AuthorizedKeysFile.*/AuthorizedKeysFile .ssh\/authorized_keys/' "$sshd_config" 2>/dev/null
+            needs_restart=true
+        fi
+        
+        # 配置StrictModes
+        if ! sudo grep -q "^StrictModes yes" "$sshd_config" 2>/dev/null; then
+            info "配置StrictModes..."
+            sudo sed -i 's/^#*StrictModes.*/StrictModes yes/' "$sshd_config" 2>/dev/null
+            needs_restart=true
+        fi
+        
+        # 如果需要，重启SSH服务
+        if [ "$needs_restart" = true ]; then
+            info "重启SSH服务..."
+            if command -v systemctl >/dev/null 2>&1; then
+                # systemd系统（新版Ubuntu/Debian）
+                if systemctl is-active --quiet ssh; then
+                    sudo systemctl restart ssh
+                elif systemctl is-active --quiet sshd; then
+                    sudo systemctl restart sshd
+                else
+                    error "SSH服务未运行"
+                    return 1
+                fi
+            elif command -v service >/dev/null 2>&1; then
+                # 传统init.d系统（旧版Ubuntu/Debian）
+                if service ssh status >/dev/null 2>&1; then
+                    sudo service ssh restart
+                elif service sshd status >/dev/null 2>&1; then
+                    sudo service sshd restart
+                else
+                    error "SSH服务未运行"
+                    return 1
+                fi
+            else
+                error "无法找到可用的SSH服务管理命令"
+                return 1
+            fi
+            
+            if [ $? -eq 0 ]; then
+                success "SSH服务已重启"
+            else
+                error "SSH服务重启失败"
+                return 1
+            fi
+        else
+            info "SSH配置已是最新，无需重启"
+        fi
+        
+        return 0
+    }
+
     # 获取公网IP
     get_public_ip() {
-        # 尝试多个IP查询服务
-        local ip
-        ip=$(curl -s https://api.ipify.org 2>/dev/null) || \
-        ip=$(curl -s http://checkip.amazonaws.com 2>/dev/null) || \
-        ip=$(curl -s https://api.ip.sb/ip 2>/dev/null) || \
-        ip=$(curl -s https://ipinfo.io/ip 2>/dev/null)
-
+        local ip=""
+        # 首先尝试获取本地IP
+        ip=$(hostname -I 2>/dev/null | awk '{print $1}')
+        
+        # 如果本地IP获取失败，尝试获取公网IP
+        if [ -z "$ip" ]; then
+            ip=$(curl -s https://api.ipify.org 2>/dev/null) || \
+            ip=$(curl -s http://checkip.amazonaws.com 2>/dev/null) || \
+            ip=$(curl -s https://api.ip.sb/ip 2>/dev/null) || \
+            ip=$(curl -s https://ipinfo.io/ip 2>/dev/null)
+        fi
+        
         if [ -n "$ip" ]; then
             echo "$ip"
             return 0
-        else
-            # 如果无法获取公网IP，使用本地IP
-            ip=$(hostname -I | awk '{print $1}')
-            if [ -n "$ip" ]; then
-                echo "$ip"
-                return 0
-            fi
         fi
+        
         return 1
     }
 
     # 获取SSH端口
     get_ssh_port() {
-        local port
+        local port=""
         # 首先尝试从sshd_config获取端口
         if [ -f "/etc/ssh/sshd_config" ]; then
-            port=$(grep -E "^Port [0-9]+" /etc/ssh/sshd_config | awk '{print $2}')
+            port=$(sudo grep -E "^Port [0-9]+" /etc/ssh/sshd_config 2>/dev/null | awk '{print $2}')
         fi
         
         # 如果没有找到端口配置，使用默认端口22

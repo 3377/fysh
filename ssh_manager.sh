@@ -322,31 +322,44 @@ upload_to_webdav() {
         warn "创建WebDAV目录失败，目录可能已存在"
     fi
     
-    # 上传私钥（如果本地存在）
-    if [ -f "$SSH_DIR/$KEY_NAME" ]; then
-        if ! curl -s -k -T "$SSH_DIR/$KEY_NAME" -u "$user:$pass" "$WEBDAV_FULL_URL/${KEY_NAME}"; then
-            error "私钥上传失败"
-            return 1
+    local upload_failed=false
+    
+    # 检查WebDAV上是否已存在密钥文件
+    if ! curl -s -k -I -u "$user:$pass" "$WEBDAV_FULL_URL/$KEY_NAME" | grep -q "HTTP/.*[[:space:]]2"; then
+        info "WebDAV上不存在密钥，准备上传..."
+        # 上传密钥文件
+        if [ -f "$SSH_DIR/$KEY_NAME" ]; then
+            info "上传SSH密钥..."
+            if ! curl -s -k -T "$SSH_DIR/$KEY_NAME" -u "$user:$pass" "$WEBDAV_FULL_URL/$KEY_NAME" || \
+               ! curl -s -k -T "$SSH_DIR/${KEY_NAME}.pub" -u "$user:$pass" "$WEBDAV_FULL_URL/${KEY_NAME}.pub"; then
+                error "SSH密钥上传失败"
+                upload_failed=true
+            else
+                success "SSH密钥上传成功"
+            fi
         fi
+    else
+        info "WebDAV上已存在密钥，跳过上传"
     fi
     
-    # 上传公钥（如果本地存在）
-    if [ -f "$SSH_DIR/${KEY_NAME}.pub" ]; then
-        if ! curl -s -k -T "$SSH_DIR/${KEY_NAME}.pub" -u "$user:$pass" "$WEBDAV_FULL_URL/${KEY_NAME}.pub"; then
-            error "公钥上传失败"
-            return 1
-        fi
-    fi
-    
-    # 上传主机列表
+    # 上传主机列表前先删除现有文件
     if [ -f "$HOSTS_FILE" ]; then
+        info "删除WebDAV上的现有hosts文件..."
+        curl -s -k -X DELETE -u "$user:$pass" "$WEBDAV_FULL_URL/hosts" > /dev/null 2>&1
+        
+        info "上传新的主机列表..."
         if ! curl -s -k -T "$HOSTS_FILE" -u "$user:$pass" "$WEBDAV_FULL_URL/hosts"; then
             error "主机列表上传失败"
-            return 1
+            upload_failed=true
+        else
+            success "主机列表上传成功"
         fi
     fi
     
-    success "文件上传成功"
+    if [ "$upload_failed" = true ]; then
+        return 1
+    fi
+    
     return 0
 }
 
@@ -599,29 +612,22 @@ upload_hosts_to_webdav() {
     # 上传合并后的主机列表
     info "上传最终的主机列表..."
     if [ -s "$HOSTS_FILE" ]; then
-        # 先创建临时备份文件
-        local webdav_backup="/tmp/hosts.backup"
-        if curl -s -k -u "$user:$pass" "$WEBDAV_FULL_URL/hosts" -o "$webdav_backup"; then
-            info "已创建WebDAV上的备份文件"
-        fi
+        # 先删除WebDAV上的现有hosts文件
+        curl -s -k -X DELETE -u "$user:$pass" "$WEBDAV_FULL_URL/hosts" > /dev/null 2>&1
+        info "已删除WebDAV上的现有hosts文件"
         
+        # 上传新的主机列表
         if curl -s -k -T "$HOSTS_FILE" -u "$user:$pass" "$WEBDAV_FULL_URL/hosts"; then
             success "授权列表上传成功"
             info "最终的主机列表内容："
             cat "$HOSTS_FILE"
         else
-            error "授权列表上传失败，尝试还原备份"
-            if [ -s "$webdav_backup" ]; then
-                if curl -s -k -T "$webdav_backup" -u "$user:$pass" "$WEBDAV_FULL_URL/hosts"; then
-                    warn "已还原WebDAV上的备份文件"
-                else
-                    error "还原备份失败"
-                fi
-            fi
-            rm -f "$temp_merged" "$temp_remote" "$temp_backup" "$webdav_backup"
+            error "授权列表上传失败"
+            # 如果上传失败，保留本地文件
+            cp "$temp_backup" "$HOSTS_FILE"
+            rm -f "$temp_merged" "$temp_remote" "$temp_backup"
             return 1
         fi
-        rm -f "$webdav_backup"
     else
         error "本地主机列表为空，取消上传"
         rm -f "$temp_merged" "$temp_remote" "$temp_backup"

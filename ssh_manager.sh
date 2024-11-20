@@ -516,47 +516,37 @@
         echo
         info "授权主机列表："
         if [ -f "$HOSTS_FILE" ] && [ -s "$HOSTS_FILE" ]; then
-            # 定义列宽
-            local hostname_width=16
-            local ip_width=15
-            local port_width=8
-            local time_width=19
-            local status_width=6
-            
             # 定义颜色代码
-            local GREEN='\033[0;32m'
-            local RED='\033[0;31m'
-            local YELLOW='\033[0;33m'
+            local GREEN='\033[32m'
+            local RED='\033[31m'
+            local YELLOW='\033[33m'
             local NC='\033[0m'
             
             # 打印表头
-            printf "%-${hostname_width}s %-${ip_width}s %-${port_width}s %-${time_width}s %-${time_width}s %-${status_width}s\n" \
+            printf "%-15s %-15s %-8s %-19s %-19s %s\n" \
                 "主机名" "公网IP" "端口" "授权时间" "最后测试时间" "状态"
             
-            # 计算总宽度并打印分隔线
-            local total_width=$((hostname_width + ip_width + port_width + time_width * 2 + status_width + 5))
-            printf "%${total_width}s\n" | tr ' ' '-'
+            # 打印分隔线
+            printf "%s\n" "--------------------------------------------------------------------------------"
             
             while IFS='|' read -r host timestamp ip port last_test || [ -n "$host" ]; do
                 if [ -n "$host" ]; then
                     # 测试连接状态
                     if [ -n "$ip" ] && [ -n "$port" ]; then
                         if nc -z -w 5 "$ip" "$port" >/dev/null 2>&1; then
-                            status="${GREEN}在线${NC}"
+                            status="在线"
+                            printf "%-15s %-15s %-8s %-19s %-19s ${GREEN}%s${NC}\n" \
+                                "$host" "$ip" "$port" "$timestamp" "$last_test" "$status"
                         else
-                            status="${RED}离线${NC}"
+                            status="离线"
+                            printf "%-15s %-15s %-8s %-19s %-19s ${RED}%s${NC}\n" \
+                                "$host" "$ip" "$port" "$timestamp" "$last_test" "$status"
                         fi
                     else
-                        status="${YELLOW}未知${NC}"
+                        status="未知"
+                        printf "%-15s %-15s %-8s %-19s %-19s ${YELLOW}%s${NC}\n" \
+                            "$host" "$ip" "$port" "$timestamp" "$last_test" "$status"
                     fi
-                    
-                    # 如果时间戳为空，使用"-"代替
-                    [ -z "$timestamp" ] && timestamp="-"
-                    [ -z "$last_test" ] && last_test="-"
-                    
-                    # 使用printf输出，注意颜色代码不计入宽度
-                    printf "%-${hostname_width}s %-${ip_width}s %-${port_width}s %-${time_width}s %-${time_width}s %b\n" \
-                        "$host" "$ip" "$port" "$timestamp" "$last_test" "$status"
                 fi
             done < "$HOSTS_FILE"
         else

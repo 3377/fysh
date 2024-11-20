@@ -217,27 +217,6 @@ download_from_webdav() {
     # 清理临时目录
     rm -rf "$temp_dir"
 
-    # 下载主机列表
-    if download_file "$WEBDAV_FULL_URL/hosts" "$HOSTS_FILE.remote" "$user" "$pass"; then
-        info "下载到现有主机列表，进行合并..."
-        # 如果本地主机列表存在，则合并
-        if [ -f "$HOSTS_FILE" ]; then
-            # 合并远程和本地主机列表，保留最新的记录
-            cat "$HOSTS_FILE" "$HOSTS_FILE.remote" | sort -t'|' -k1,1 -u > "$HOSTS_FILE.merged"
-            mv "$HOSTS_FILE.merged" "$HOSTS_FILE"
-            rm -f "$HOSTS_FILE.remote"
-        else
-            # 如果本地文件不存在，直接使用远程文件
-            mv "$HOSTS_FILE.remote" "$HOSTS_FILE"
-        fi
-        chmod 600 "$HOSTS_FILE"
-    else
-        warn "主机列表下载失败，将创建新的主机列表"
-        : > "$HOSTS_FILE"
-        chmod 600 "$HOSTS_FILE"
-        need_upload=true
-    fi
-
     # 如果没有有效的密钥，生成新的
     if [ "$key_exists" = false ]; then
         info "生成新的密钥对..."
@@ -248,6 +227,35 @@ download_from_webdav() {
         need_upload=true
     fi
     
+    # 下载主机列表
+    if download_file "$WEBDAV_FULL_URL/hosts" "$HOSTS_FILE.remote" "$user" "$pass"; then
+        info "下载到现有主机列表，进行合并..."
+        # 如果本地主机列表存在，则只添加新主机
+        if [ -f "$HOSTS_FILE" ]; then
+            # 获取本地主机名
+            local current_hostname
+            current_hostname=$(hostname)
+            # 检查本地主机是否在远程列表中
+            if ! grep -q "^${current_hostname}|" "$HOSTS_FILE.remote"; then
+                # 如果不在远程列表中，将本地主机添加到远程列表
+                local timestamp
+                timestamp=$(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M:%S')
+                echo "${current_hostname}|${timestamp}" >> "$HOSTS_FILE.remote"
+                need_upload=true
+            fi
+        fi
+        # 使用远程文件作为主机列表
+        mv "$HOSTS_FILE.remote" "$HOSTS_FILE"
+        chmod 600 "$HOSTS_FILE"
+    else
+        warn "主机列表下载失败，将创建新的主机列表"
+        if [ ! -f "$HOSTS_FILE" ]; then
+            : > "$HOSTS_FILE"
+            chmod 600 "$HOSTS_FILE"
+        fi
+        need_upload=true
+    fi
+
     # 如果需要上传，执行上传操作
     if [ "$need_upload" = true ]; then
         info "上传新生成的配置到WebDAV..."

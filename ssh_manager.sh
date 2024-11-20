@@ -5,7 +5,7 @@
     SSH_MANAGER_DIR="$HOME/.ssh_manager"
     SSH_DIR="$SSH_MANAGER_DIR"
     KEY_NAME="drfykey"
-    HOSTS_FILE="$SSH_MANAGER_DIR/hosts"
+    HOSTS_FILE="$SSH_MANAGER_DIR/hosts.md"
     CURRENT_USER="$(whoami)"
     CURRENT_HOST="$(hostname)"
     TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
@@ -191,12 +191,12 @@
         
         info "正在从WebDAV下载文件..."
         
-        # 检查目录是否存在，使用-L参数处理重定向
+        # 检查目录是否存在
         if ! curl -s -k -L -I -u "$user:$pass" "$WEBDAV_FULL_URL" | grep -q "HTTP/.*[[:space:]]2"; then
             info "WebDAV目录不存在，将在上传时创建"
             need_upload=true
         fi
-        
+
         # 创建临时目录用于验证下载的文件
         local temp_dir
         temp_dir=$(mktemp -d)
@@ -233,77 +233,17 @@
 
         # 清理临时目录
         rm -rf "$temp_dir"
-
-        # 获取本地主机名和时间戳
-        local current_hostname
-        current_hostname=$(hostname)
-        local timestamp
-        timestamp=$(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M:%S')
         
-        # 创建临时文件用于合并
-        local temp_merged
-        temp_merged=$(mktemp)
-        local temp_remote
-        temp_remote=$(mktemp)
-        
-        # 确保本地主机列表文件存在
-        touch "$HOSTS_FILE"
-        
-        # 下载远程主机列表
-        if download_file "$WEBDAV_FULL_URL/hosts" "$temp_remote" "$user" "$pass"; then
-            info "下载到现有主机列表，进行处理..."
-            
-            if [ -s "$temp_remote" ]; then
-                info "当前远程主机列表："
-                cat "$temp_remote"
-                
-                # 合并远程和本地列表（如果本地列表存在）
-                if [ -s "$HOSTS_FILE" ]; then
-                    cat "$HOSTS_FILE" "$temp_remote" > "$temp_merged"
-                else
-                    cat "$temp_remote" > "$temp_merged"
-                fi
-            else
-                info "远程主机列表为空，使用本地列表"
-                if [ -s "$HOSTS_FILE" ]; then
-                    cat "$HOSTS_FILE" > "$temp_merged"
-                fi
-            fi
+        # 下载hosts文件
+        local temp_remote="$SSH_MANAGER_DIR/hosts.remote"
+        if ! download_file "$WEBDAV_FULL_URL/hosts.md" "$temp_remote" "$user" "$pass"; then
+            warn "下载hosts文件失败"
+            rm -f "$temp_remote"
         else
-            warn "主机列表下载失败，使用本地列表"
-            if [ -s "$HOSTS_FILE" ]; then
-                cat "$HOSTS_FILE" > "$temp_merged"
-            fi
+            mv "$temp_remote" "$HOSTS_FILE"
+            chmod 600 "$HOSTS_FILE"
+            info "hosts文件下载成功"
         fi
-        
-        # 检查当前主机是否需要添加到列表中
-        if ! grep -q "^${current_hostname}|" "$temp_merged" 2>/dev/null; then
-            info "添加当前主机到列表: ${current_hostname}"
-            echo "${current_hostname}|${timestamp}" >> "$temp_merged"
-            need_upload=true
-        else
-            # 更新现有主机的时间戳
-            sed -i "s/^${current_hostname}|.*$/${current_hostname}|${timestamp}/" "$temp_merged"
-            info "更新当前主机的时间戳: ${current_hostname}"
-            need_upload=true
-        fi
-        
-        # 确保列表不为空且格式正确
-        if [ ! -s "$temp_merged" ]; then
-            info "创建新的主机列表，添加当前主机"
-            echo "${current_hostname}|${timestamp}" > "$temp_merged"
-            need_upload=true
-        fi
-        
-        # 对合并后的列表进行排序和去重，保留最新的时间戳
-        sort -t'|' -k1,1 -u "$temp_merged" > "$HOSTS_FILE"
-        chmod 600 "$HOSTS_FILE"
-        
-        info "当前主机列表内容："
-        cat "$HOSTS_FILE"
-        
-        # 清理临时文件
-        rm -f "$temp_merged" "$temp_remote"
         
         # 如果没有有效的密钥，生成新的
         if [ "$key_exists" = false ]; then
@@ -317,9 +257,9 @@
         
         # 如果需要，执行上传操作
         if [ "$need_upload" = true ]; then
-            info "上传新生成的配置到WebDAV..."
+            info "上传新生成的密钥到WebDAV..."
             if ! upload_to_webdav "$user" "$pass"; then
-                error "配置上传失败"
+                error "密钥上传失败"
                 return 1
             fi
         fi
@@ -359,17 +299,17 @@
             info "WebDAV上已存在密钥，跳过上传"
         fi
         
-        # 上传主机列表前先删除现有文件
+        # 上传hosts文件前先删除现有文件
         if [ -f "$HOSTS_FILE" ]; then
             info "删除WebDAV上的现有hosts文件..."
-            curl -s -k -X DELETE -u "$user:$pass" "$WEBDAV_FULL_URL/hosts" > /dev/null 2>&1
+            curl -s -k -X DELETE -u "$user:$pass" "$WEBDAV_FULL_URL/hosts.md" > /dev/null 2>&1
             
-            info "上传新的主机列表..."
-            if ! curl -s -k -T "$HOSTS_FILE" -u "$user:$pass" "$WEBDAV_FULL_URL/hosts"; then
-                error "主机列表上传失败"
+            info "上传新的hosts文件..."
+            if ! curl -s -k -T "$HOSTS_FILE" -u "$user:$pass" "$WEBDAV_FULL_URL/hosts.md"; then
+                error "hosts文件上传失败"
                 upload_failed=true
             else
-                success "主机列表上传成功"
+                success "hosts文件上传成功"
             fi
         fi
         

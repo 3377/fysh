@@ -603,7 +603,7 @@ upload_hosts_to_webdav() {
 show_help() {
     echo "SSH Manager - SSH密钥管理工具 v2.0.0"
     echo
-    echo "使用方法: $0 <WebDAV用户名> <WebDAV密码>"
+    echo "使用方法: $0 [WebDAV用户名 WebDAV密码]"
     echo
     echo "功能说明："
     echo "本工具用于管理多台服务器之间的SSH密钥同步和授权，通过WebDAV实现配置集中管理。"
@@ -644,7 +644,6 @@ show_help() {
     echo "示例："
     echo "  $0 webdav_user webdav_password"
     echo
-    echo "注意：请确保WebDAV服务器的安全性，因为它存储着重要的SSH配置。"
 }
 
 # 配置SSHD
@@ -713,20 +712,51 @@ main() {
             source "$CONFIG_FILE"
             if [ -n "$WEBDAV_USER" ] && [ -n "$WEBDAV_PASS" ]; then
                 info "使用已保存的WebDAV配置"
-                handle_menu
+                # 测试WebDAV连接
+                if test_webdav "$WEBDAV_USER" "$WEBDAV_PASS"; then
+                    handle_menu
+                else
+                    error "WebDAV连接测试失败，请检查配置"
+                    exit 1
+                fi
             else
                 error "未找到WebDAV配置信息"
                 show_help
                 exit 1
             fi
         else
-            error "未找到配置文件，请先使用用户名和密码参数运行脚本进行初始化"
-            show_help
-            exit 1
+            # 尝试从环境变量读取配置
+            if [ -n "$WEBDAV_USER" ] && [ -n "$WEBDAV_PASS" ]; then
+                info "使用环境变量中的WebDAV配置"
+                # 保存配置到文件
+                mkdir -p "$(dirname "$CONFIG_FILE")"
+                echo "WEBDAV_USER='$WEBDAV_USER'" > "$CONFIG_FILE"
+                echo "WEBDAV_PASS='$WEBDAV_PASS'" >> "$CONFIG_FILE"
+                chmod 600 "$CONFIG_FILE"
+                
+                # 测试WebDAV连接
+                if test_webdav "$WEBDAV_USER" "$WEBDAV_PASS"; then
+                    handle_menu
+                else
+                    error "WebDAV连接测试失败，请检查配置"
+                    rm -f "$CONFIG_FILE"
+                    exit 1
+                fi
+            else
+                error "未找到配置文件，请先使用用户名和密码参数运行脚本进行初始化"
+                show_help
+                exit 1
+            fi
         fi
     elif [ $# -eq 2 ]; then
         WEBDAV_USER="$1"
         WEBDAV_PASS="$2"
+        
+        # 测试WebDAV连接
+        if ! test_webdav "$WEBDAV_USER" "$WEBDAV_PASS"; then
+            error "WebDAV连接测试失败，请检查凭据"
+            exit 1
+        fi
         
         # 保存配置到文件
         mkdir -p "$(dirname "$CONFIG_FILE")"

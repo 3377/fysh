@@ -309,7 +309,7 @@
             need_upload=true
         fi
         
-        # 如果需要上传，执行上传操作
+        # 如果需要，执行上传操作
         if [ "$need_upload" = true ]; then
             info "上传新生成的配置到WebDAV..."
             if ! upload_to_webdav "$user" "$pass"; then
@@ -522,8 +522,14 @@
             local YELLOW='\033[33m'
             local NC='\033[0m'
             
+            # 定义列宽
+            local host_width=20
+            local ip_width=15
+            local port_width=8
+            local time_width=19
+            
             # 打印表头
-            printf "%-15s %-15s %-8s %-19s %-19s %s\n" \
+            printf "%-${host_width}s %-${ip_width}s %-${port_width}s %-${time_width}s %-${time_width}s %s\n" \
                 "主机名" "公网IP" "端口" "授权时间" "最后测试时间" "状态"
             
             # 打印分隔线
@@ -535,16 +541,16 @@
                     if [ -n "$ip" ] && [ -n "$port" ]; then
                         if nc -z -w 5 "$ip" "$port" >/dev/null 2>&1; then
                             status="在线"
-                            printf "%-15s %-15s %-8s %-19s %-19s ${GREEN}%s${NC}\n" \
+                            printf "%-${host_width}s %-${ip_width}s %-${port_width}s %-${time_width}s %-${time_width}s ${GREEN}%s${NC}\n" \
                                 "$host" "$ip" "$port" "$timestamp" "$last_test" "$status"
                         else
                             status="离线"
-                            printf "%-15s %-15s %-8s %-19s %-19s ${RED}%s${NC}\n" \
+                            printf "%-${host_width}s %-${ip_width}s %-${port_width}s %-${time_width}s %-${time_width}s ${RED}%s${NC}\n" \
                                 "$host" "$ip" "$port" "$timestamp" "$last_test" "$status"
                         fi
                     else
                         status="未知"
-                        printf "%-15s %-15s %-8s %-19s %-19s ${YELLOW}%s${NC}\n" \
+                        printf "%-${host_width}s %-${ip_width}s %-${port_width}s %-${time_width}s %-${time_width}s ${YELLOW}%s${NC}\n" \
                             "$host" "$ip" "$port" "$timestamp" "$last_test" "$status"
                     fi
                 fi

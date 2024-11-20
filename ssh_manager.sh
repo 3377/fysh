@@ -353,10 +353,13 @@
         local ip="$2"
         local port="$3"
         local key_file="$SSH_MANAGER_DIR/$KEY_NAME"
+
+        # 确保私钥权限正确
+        chmod 600 "$key_file"
         
-        # 使用下载的私钥测试连接
-        if timeout 5 ssh -i "$key_file" -o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=5 \
-            -p "$port" "root@$ip" "exit" >/dev/null 2>&1; then
+        # 使用下载的私钥测试连接，增加详细输出用于调试
+        if ssh -v -i "$key_file" -o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=5 \
+            -p "$port" "root@$ip" "echo 'Connection test successful'" >/dev/null 2>&1; then
             return 0
         else
             return 1
@@ -372,6 +375,7 @@
         fi
 
         local temp_file="$SSH_MANAGER_DIR/hosts.temp"
+        : > "$temp_file"  # 清空或创建临时文件
         local current_time=$(date '+%Y-%m-%d %H:%M:%S')
         local has_changes=0
         
@@ -381,11 +385,14 @@
                 printf "正在测试 %s (%s:%s)..." "$host" "$ip" "$port"
                 if test_host_connection "$host" "$ip" "$port"; then
                     echo -e "\033[32m在线\033[0m"
+                    # 更新最后测试时间
                     echo "$host|$timestamp|$ip|$port|$current_time" >> "$temp_file"
                     has_changes=1
                 else
                     echo -e "\033[31m离线\033[0m"
-                    echo "$host|$timestamp|$ip|$port|$last_test" >> "$temp_file"
+                    # 仍然更新最后测试时间，因为我们确实进行了测试
+                    echo "$host|$timestamp|$ip|$port|$current_time" >> "$temp_file"
+                    has_changes=1
                 fi
             else
                 [ -n "$host" ] && echo "$host|$timestamp|$ip|$port|$last_test" >> "$temp_file"
@@ -401,7 +408,7 @@
                 error "上传更新后的主机列表失败"
                 return 1
             fi
-            info "主机列表已更新"
+            success "主机列表已更新"
         else
             rm -f "$temp_file"
             info "主机状态未发生变化"
@@ -437,9 +444,8 @@
             while IFS='|' read -r host timestamp ip port last_test || [ -n "$host" ]; do
                 if [ -n "$host" ]; then
                     if [ -n "$ip" ] && [ -n "$port" ]; then
-                        # 使用ssh测试连接
-                        if timeout 5 ssh -i "$SSH_MANAGER_DIR/$KEY_NAME" -o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=5 \
-                            -p "$port" "root@$ip" "exit" >/dev/null 2>&1; then
+                        # 使用相同的测试连接函数
+                        if test_host_connection "$host" "$ip" "$port"; then
                             echo -e "$(printf "%-16s %-14s %-7s %-19s %-19s " \
                                 "$host" "$ip" "$port" "$timestamp" "$last_test")${GREEN}在线${NC}"
                         else

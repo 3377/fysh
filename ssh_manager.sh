@@ -347,45 +347,67 @@
         return 0
     }
 
+    # 测试主机连接
+    test_host_connection() {
+        local host="$1"
+        local ip="$2"
+        local port="$3"
+        local key_file="$SSH_MANAGER_DIR/$KEY_NAME"
+        
+        # 使用下载的私钥测试连接
+        if timeout 5 ssh -i "$key_file" -o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=5 \
+            -p "$port" "root@$ip" "exit" >/dev/null 2>&1; then
+            return 0
+        else
+            return 1
+        fi
+    }
+
     # 测试所有主机连通性
-    test_all_connections() {
-        info "从WebDAV获取最新主机列表..."
+    test_hosts() {
+        info "从WebDAV获取最新配置..."
         if ! download_from_webdav "$WEBDAV_USER" "$WEBDAV_PASS"; then
-            error "获取主机列表失败"
+            error "获取配置失败"
             return 1
         fi
 
-        info "开始测试所有主机连通性..."
-        local temp_file="${HOSTS_FILE}.tmp"
-        > "$temp_file"
+        local temp_file="$SSH_MANAGER_DIR/hosts.temp"
+        local current_time=$(date '+%Y-%m-%d %H:%M:%S')
+        local has_changes=0
         
+        info "开始测试主机连通性..."
         while IFS='|' read -r host timestamp ip port last_test || [ -n "$host" ]; do
             if [ -n "$host" ] && [ -n "$ip" ] && [ -n "$port" ]; then
-                echo -n "测试主机 $host ($ip:$port) ... "
-                
-                # 使用ssh测试连接，设置短超时时间
-                if timeout 5 ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=5 \
-                    -p "$port" "root@$ip" "exit" >/dev/null 2>&1; then
-                    echo "在线"
-                    echo "$host|$timestamp|$ip|$port|$(date '+%Y-%m-%d %H:%M:%S')" >> "$temp_file"
+                printf "正在测试 %s (%s:%s)..." "$host" "$ip" "$port"
+                if test_host_connection "$host" "$ip" "$port"; then
+                    echo -e "\033[32m在线\033[0m"
+                    echo "$host|$timestamp|$ip|$port|$current_time" >> "$temp_file"
+                    has_changes=1
                 else
-                    echo "离线"
+                    echo -e "\033[31m离线\033[0m"
                     echo "$host|$timestamp|$ip|$port|$last_test" >> "$temp_file"
                 fi
+            else
+                [ -n "$host" ] && echo "$host|$timestamp|$ip|$port|$last_test" >> "$temp_file"
             fi
         done < "$HOSTS_FILE"
-        
-        # 更新主机文件
-        mv "$temp_file" "$HOSTS_FILE"
-        chmod 600 "$HOSTS_FILE"
-        
-        # 上传更新后的主机文件到WebDAV
-        if ! upload_to_webdav "$WEBDAV_USER" "$WEBDAV_PASS"; then
-            warn "主机状态已更新，但上传到WebDAV失败"
-            return 1
+
+        if [ "$has_changes" -eq 1 ]; then
+            mv "$temp_file" "$HOSTS_FILE"
+            chmod 600 "$HOSTS_FILE"
+            
+            info "上传更新后的主机列表..."
+            if ! upload_to_webdav "$WEBDAV_USER" "$WEBDAV_PASS"; then
+                error "上传更新后的主机列表失败"
+                return 1
+            fi
+            info "主机列表已更新"
+        else
+            rm -f "$temp_file"
+            info "主机状态未发生变化"
         fi
         
-        success "所有主机测试完成"
+        return 0
     }
 
     # 显示授权主机列表
@@ -416,7 +438,7 @@
                 if [ -n "$host" ]; then
                     if [ -n "$ip" ] && [ -n "$port" ]; then
                         # 使用ssh测试连接
-                        if timeout 5 ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=5 \
+                        if timeout 5 ssh -i "$SSH_MANAGER_DIR/$KEY_NAME" -o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=5 \
                             -p "$port" "root@$ip" "exit" >/dev/null 2>&1; then
                             echo -e "$(printf "%-16s %-14s %-7s %-19s %-19s " \
                                 "$host" "$ip" "$port" "$timestamp" "$last_test")${GREEN}在线${NC}"
@@ -587,7 +609,7 @@
                     fi
                     ;;
                 5)
-                    test_all_connections
+                    test_hosts
                     list_hosts
                     ;;
                 6)

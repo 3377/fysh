@@ -516,11 +516,11 @@
         echo
         info "授权主机列表："
         if [ -f "$HOSTS_FILE" ] && [ -s "$HOSTS_FILE" ]; then
-            # 定义颜色代码
-            local GREEN=$'\e[32m'
-            local RED=$'\e[31m'
-            local YELLOW=$'\e[33m'
-            local NC=$'\e[0m'
+            # 定义颜色代码 - 使用echo -e来确保转义序列被正确解释
+            local GREEN=$(echo -e "\033[32m")
+            local RED=$(echo -e "\033[31m")
+            local YELLOW=$(echo -e "\033[33m")
+            local NC=$(echo -e "\033[0m")
             
             # 打印表头
             printf "%-16s %-14s %-7s %-19s %-19s %s\n" \
@@ -535,15 +535,15 @@
                     # 测试连接状态
                     if [ -n "$ip" ] && [ -n "$port" ]; then
                         if nc -z -w 5 "$ip" "$port" >/dev/null 2>&1; then
-                            printf "%-16s %-14s %-7s %-19s %-19s ${GREEN}在线${NC}\n" \
-                                "$host" "$ip" "$port" "$timestamp" "$last_test"
+                            echo -e "$(printf "%-16s %-14s %-7s %-19s %-19s " \
+                                "$host" "$ip" "$port" "$timestamp" "$last_test")${GREEN}在线${NC}"
                         else
-                            printf "%-16s %-14s %-7s %-19s %-19s ${RED}离线${NC}\n" \
-                                "$host" "$ip" "$port" "$timestamp" "$last_test"
+                            echo -e "$(printf "%-16s %-14s %-7s %-19s %-19s " \
+                                "$host" "$ip" "$port" "$timestamp" "$last_test")${RED}离线${NC}"
                         fi
                     else
-                        printf "%-16s %-14s %-7s %-19s %-19s ${YELLOW}未知${NC}\n" \
-                            "$host" "$ip" "$port" "$timestamp" "$last_test"
+                        echo -e "$(printf "%-16s %-14s %-7s %-19s %-19s " \
+                            "$host" "$ip" "$port" "$timestamp" "$last_test")${YELLOW}未知${NC}"
                     fi
                 fi
             done < "$HOSTS_FILE"

@@ -463,6 +463,76 @@
         return 0
     }
 
+    # 配置SSHD
+    configure_sshd() {
+        local sshd_config="/etc/ssh/sshd_config"
+        local needs_restart=false
+        local backup_file="${sshd_config}.backup.$(date +%Y%m%d_%H%M%S)"
+        
+        # 检查是否有root权限
+        if [ "$(id -u)" -ne 0 ]; then
+            error "配置SSHD需要root权限"
+            return 1
+        fi
+        
+        # 备份原配置文件
+        info "备份当前SSH配置..."
+        cp "$sshd_config" "$backup_file"
+        
+        # 配置PubkeyAuthentication
+        if ! grep -q "^PubkeyAuthentication yes" "$sshd_config"; then
+            info "启用公钥认证..."
+            # 注释掉所有PubkeyAuthentication行
+            sed -i 's/^PubkeyAuthentication.*/# &/' "$sshd_config"
+            # 添加新的配置
+            echo "PubkeyAuthentication yes" >> "$sshd_config"
+            needs_restart=true
+        fi
+        
+        # 配置AuthorizedKeysFile
+        if ! grep -q "^AuthorizedKeysFile.*authorized_keys" "$sshd_config"; then
+            info "配置授权密钥文件路径..."
+            # 注释掉所有AuthorizedKeysFile行
+            sed -i 's/^AuthorizedKeysFile.*/# &/' "$sshd_config"
+            # 添加新的配置
+            echo "AuthorizedKeysFile .ssh/authorized_keys" >> "$sshd_config"
+            needs_restart=true
+        fi
+        
+        # 配置StrictModes
+        if ! grep -q "^StrictModes yes" "$sshd_config"; then
+            info "配置StrictModes..."
+            # 注释掉所有StrictModes行
+            sed -i 's/^StrictModes.*/# &/' "$sshd_config"
+            # 添加新的配置
+            echo "StrictModes yes" >> "$sshd_config"
+            needs_restart=true
+        fi
+        
+        # 如果需要，重启SSH服务
+        if [ "$needs_restart" = true ]; then
+            info "重启SSH服务..."
+            if command -v systemctl >/dev/null 2>&1; then
+                systemctl restart sshd
+            elif command -v service >/dev/null 2>&1; then
+                service sshd restart
+            else
+                error "无法找到可用的服务管理命令"
+                return 1
+            fi
+            if [ $? -eq 0 ]; then
+                success "SSH服务已重启"
+            else
+                error "SSH服务重启失败"
+                return 1
+            fi
+        else
+            info "SSH配置已是最新，无需重启"
+        fi
+        
+        return 0
+    }
+
     # 显示授权主机列表
     list_hosts() {
         echo

@@ -512,14 +512,37 @@
         # 如果需要，重启SSH服务
         if [ "$needs_restart" = true ]; then
             info "重启SSH服务..."
+            # 检测系统使用的服务管理器
             if command -v systemctl >/dev/null 2>&1; then
-                systemctl restart sshd
+                # systemd系统（新版Ubuntu/Debian）
+                if systemctl is-active --quiet ssh; then
+                    systemctl restart ssh
+                elif systemctl is-active --quiet sshd; then
+                    systemctl restart sshd
+                else
+                    error "SSH服务未运行"
+                    return 1
+                fi
             elif command -v service >/dev/null 2>&1; then
-                service sshd restart
+                # 传统init.d系统（旧版Ubuntu/Debian）
+                if service --status-all | grep -Fq 'ssh'; then
+                    service ssh restart
+                elif service --status-all | grep -Fq 'sshd'; then
+                    service sshd restart
+                else
+                    error "SSH服务未运行"
+                    return 1
+                fi
+            elif [ -f /etc/init.d/ssh ]; then
+                # 直接使用init.d脚本
+                /etc/init.d/ssh restart
+            elif [ -f /etc/init.d/sshd ]; then
+                /etc/init.d/sshd restart
             else
-                error "无法找到可用的服务管理命令"
+                error "无法找到可用的SSH服务管理命令"
                 return 1
             fi
+            
             if [ $? -eq 0 ]; then
                 success "SSH服务已重启"
             else
@@ -833,6 +856,11 @@
                 source "$CONFIG_FILE"
                 if [ -n "$WEBDAV_USER" ] && [ -n "$WEBDAV_PASS" ]; then
                     info "使用已保存的WebDAV配置"
+                    # 配置SSHD
+                    if ! configure_sshd; then
+                        error "SSHD配置失败"
+                        exit 1
+                    fi
                     # 测试WebDAV连接
                     if test_webdav "$WEBDAV_USER" "$WEBDAV_PASS"; then
                         handle_menu
@@ -854,6 +882,12 @@
                     echo "WEBDAV_USER='$WEBDAV_USER'" > "$CONFIG_FILE"
                     echo "WEBDAV_PASS='$WEBDAV_PASS'" >> "$CONFIG_FILE"
                     chmod 600 "$CONFIG_FILE"
+                    
+                    # 配置SSHD
+                    if ! configure_sshd; then
+                        error "SSHD配置失败"
+                        exit 1
+                    fi
                     
                     # 测试WebDAV连接
                     if test_webdav "$WEBDAV_USER" "$WEBDAV_PASS"; then

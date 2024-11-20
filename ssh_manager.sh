@@ -379,16 +379,19 @@ authorize_current_host() {
     local hostname
     hostname=$(hostname)
     local timestamp
-    # 使用date命令获取北京时间
     timestamp=$(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M:%S')
+    
+    # 首先检查并修复SSH配置
+    info "检查当前主机的SSH配置..."
+    if ! check_and_fix_ssh_config; then
+        warn "SSH配置检查/修复失败，但将继续尝试授权过程"
+    fi
     
     # 检查主机是否已经在列表中
     if grep -q "^${hostname}|" "$HOSTS_FILE"; then
         info "主机 ${hostname} 已在授权列表中"
     else
-        # 添加新主机到列表（带时间戳）
         echo "${hostname}|${timestamp}" >> "$HOSTS_FILE"
-        # 对主机列表去重，保留最新的记录
         sort -t'|' -k1,1 -u "$HOSTS_FILE" -o "$HOSTS_FILE"
         success "已授权当前主机: ${hostname} (${timestamp})"
     fi
@@ -397,56 +400,94 @@ authorize_current_host() {
     local ssh_dir="$HOME/.ssh"
     local auth_keys="$ssh_dir/authorized_keys"
     
-    # 创建.ssh目录（如果不存在）
     if [ ! -d "$ssh_dir" ]; then
         mkdir -p "$ssh_dir"
         chmod 700 "$ssh_dir"
     fi
     
-    # 创建authorized_keys文件（如果不存在）
     if [ ! -f "$auth_keys" ]; then
         touch "$auth_keys"
     fi
     
-    # 设置正确的权限
-    chmod 700 "$ssh_dir"
     chmod 600 "$auth_keys"
     
-    # 获取公钥内容
-    local pub_key
-    pub_key=$(cat "$SSH_DIR/${KEY_NAME}.pub")
-    
-    # 检查公钥是否已存在于authorized_keys中
-    if ! grep -qF "$pub_key" "$auth_keys"; then
-        # 添加公钥到authorized_keys
-        echo "$pub_key" >> "$auth_keys"
-        info "已将公钥添加到 authorized_keys"
+    # 将公钥添加到authorized_keys
+    if [ -f "$SSH_DIR/${KEY_NAME}.pub" ]; then
+        cat "$SSH_DIR/${KEY_NAME}.pub" >> "$auth_keys"
+        sort -u "$auth_keys" -o "$auth_keys"
+        success "公钥已添加到authorized_keys"
     else
-        info "公钥已存在于 authorized_keys 中"
-    fi
-    
-    # 验证authorized_keys文件的内容和权限
-    if [ ! -s "$auth_keys" ]; then
-        error "authorized_keys 文件为空"
+        error "找不到公钥文件：$SSH_DIR/${KEY_NAME}.pub"
         return 1
     fi
     
-    # 验证公钥是否正确添加
-    if ! grep -qF "$pub_key" "$auth_keys"; then
-        error "公钥未能正确添加到 authorized_keys"
-        return 1
-    fi
+    return 0
+}
+
+# 检查并修复SSH配置
+check_and_fix_ssh_config() {
+    info "检查SSH配置..."
+    local sshd_config="/etc/ssh/sshd_config"
+    local needs_restart=false
     
-    # 配置SSHD
-    if [ -f "/etc/ssh/sshd_config" ]; then
-        if configure_sshd; then
-            success "SSH服务配置完成"
+    # 检查是否有root权限
+    if [ "$(id -u)" -ne 0 ]; then
+        warn "需要root权限来修改SSH配置"
+        if command -v sudo >/dev/null 2>&1; then
+            info "尝试使用sudo获取权限..."
         else
-            warn "SSH服务配置失败，可能需要手动配置"
+            error "无法修改SSH配置：需要root权限且系统未安装sudo"
+            return 1
         fi
     fi
     
-    info "SSH密钥授权配置完成"
+    # 检查sshd_config是否存在
+    if [ ! -f "$sshd_config" ]; then
+        error "找不到SSH配置文件：$sshd_config"
+        return 1
+    fi
+    
+    # 备份配置文件
+    local backup_file="${sshd_config}.backup.$(date +%Y%m%d_%H%M%S)"
+    if ! sudo cp "$sshd_config" "$backup_file"; then
+        error "无法创建配置文件备份"
+        return 1
+    fi
+    info "已创建SSH配置备份：$backup_file"
+    
+    # 检查并启用PubkeyAuthentication
+    if ! sudo grep -q "^PubkeyAuthentication yes" "$sshd_config"; then
+        info "启用PubkeyAuthentication..."
+        # 注释掉所有PubkeyAuthentication行
+        sudo sed -i 's/^[#]*PubkeyAuthentication.*//' "$sshd_config"
+        # 添加新的配置
+        echo "PubkeyAuthentication yes" | sudo tee -a "$sshd_config" > /dev/null
+        needs_restart=true
+    fi
+    
+    # 检查AuthorizedKeysFile配置
+    if ! sudo grep -q "^AuthorizedKeysFile" "$sshd_config"; then
+        info "配置AuthorizedKeysFile..."
+        echo "AuthorizedKeysFile .ssh/authorized_keys" | sudo tee -a "$sshd_config" > /dev/null
+        needs_restart=true
+    fi
+    
+    # 如果配置有改动，重启SSH服务
+    if [ "$needs_restart" = true ]; then
+        info "SSH配置已修改，重启SSH服务..."
+        if command -v systemctl >/dev/null 2>&1; then
+            sudo systemctl restart sshd
+        elif command -v service >/dev/null 2>&1; then
+            sudo service sshd restart
+        else
+            error "无法重启SSH服务：未找到systemctl或service命令"
+            return 1
+        fi
+        success "SSH服务已重启，配置生效"
+    else
+        info "SSH配置正确，无需修改"
+    fi
+    
     return 0
 }
 

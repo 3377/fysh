@@ -219,36 +219,50 @@ download_from_webdav() {
 
     # 下载主机列表
     if download_file "$WEBDAV_FULL_URL/hosts" "$HOSTS_FILE.remote" "$user" "$pass"; then
-        info "下载到现有主机列表，进行合并..."
-        # 获取本地主机名
+        info "下载到现有主机列表，进行处理..."
+        
+        # 获取本地主机名和时间戳
         local current_hostname
         current_hostname=$(hostname)
         local timestamp
         timestamp=$(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M:%S')
         
-        # 如果远程文件为空，直接添加当前主机
-        if [ ! -s "$HOSTS_FILE.remote" ]; then
-            echo "${current_hostname}|${timestamp}" > "$HOSTS_FILE.remote"
-            need_upload=true
-        else
-            # 检查当前主机是否在远程列表中
-            if ! grep -q "^${current_hostname}|" "$HOSTS_FILE.remote"; then
-                # 如果不在远程列表中，将当前主机添加到远程列表
-                echo "${current_hostname}|${timestamp}" >> "$HOSTS_FILE.remote"
-                need_upload=true
-            fi
+        # 创建临时文件用于合并
+        local temp_merged
+        temp_merged=$(mktemp)
+        
+        # 如果远程文件不为空，复制到临时文件
+        if [ -s "$HOSTS_FILE.remote" ]; then
+            cat "$HOSTS_FILE.remote" > "$temp_merged"
+            info "当前远程主机列表："
+            cat "$HOSTS_FILE.remote"
         fi
         
-        # 使用远程文件（可能包含新添加的当前主机）作为主机列表
-        mv "$HOSTS_FILE.remote" "$HOSTS_FILE"
+        # 检查当前主机是否在列表中
+        if ! grep -q "^${current_hostname}|" "$temp_merged" 2>/dev/null; then
+            info "添加当前主机到列表: ${current_hostname}"
+            echo "${current_hostname}|${timestamp}" >> "$temp_merged"
+            need_upload=true
+        else
+            info "当前主机已在列表中: ${current_hostname}"
+        fi
+        
+        # 确保临时文件存在且不为空
+        if [ ! -s "$temp_merged" ]; then
+            info "创建新的主机列表，添加当前主机"
+            echo "${current_hostname}|${timestamp}" > "$temp_merged"
+            need_upload=true
+        fi
+        
+        # 对合并后的列表进行排序和去重
+        sort -t'|' -k1,1 -u "$temp_merged" > "$HOSTS_FILE"
+        rm -f "$temp_merged" "$HOSTS_FILE.remote"
         chmod 600 "$HOSTS_FILE"
+        
+        info "当前主机列表内容："
+        cat "$HOSTS_FILE"
     else
         warn "主机列表下载失败，将创建新的主机列表"
-        # 创建新的主机列表，只包含当前主机
-        local current_hostname
-        current_hostname=$(hostname)
-        local timestamp
-        timestamp=$(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M:%S')
         echo "${current_hostname}|${timestamp}" > "$HOSTS_FILE"
         chmod 600 "$HOSTS_FILE"
         need_upload=true
@@ -526,21 +540,33 @@ upload_hosts_to_webdav() {
         warn "创建WebDAV目录失败，目录可能已存在"
     fi
     
-    # 先下载远程主机列表并合并
-    local temp_hosts
-    temp_hosts=$(mktemp)
-    if curl -s -k -u "$user:$pass" "$WEBDAV_FULL_URL/hosts" -o "$temp_hosts"; then
-        if [ -s "$temp_hosts" ]; then
-            # 合并远程和本地主机列表，保留所有记录
-            cat "$HOSTS_FILE" "$temp_hosts" | sort -t'|' -k1,1 -u > "$HOSTS_FILE.merged"
-            mv "$HOSTS_FILE.merged" "$HOSTS_FILE"
-        fi
+    # 下载并合并远程主机列表
+    local temp_remote
+    temp_remote=$(mktemp)
+    local temp_merged
+    temp_merged=$(mktemp)
+    
+    info "尝试下载远程主机列表进行最终合并..."
+    if curl -s -k -u "$user:$pass" "$WEBDAV_FULL_URL/hosts" -o "$temp_remote" && [ -s "$temp_remote" ]; then
+        info "获取到远程主机列表："
+        cat "$temp_remote"
+        
+        # 合并本地和远程列表
+        cat "$HOSTS_FILE" "$temp_remote" | sort -t'|' -k1,1 -u > "$temp_merged"
+        mv "$temp_merged" "$HOSTS_FILE"
+        info "合并后的主机列表："
+        cat "$HOSTS_FILE"
     fi
-    rm -f "$temp_hosts"
+    
+    # 清理临时文件
+    rm -f "$temp_remote" "$temp_merged"
     
     # 上传合并后的主机列表
+    info "上传最终的主机列表..."
     if curl -s -k -T "$HOSTS_FILE" -u "$user:$pass" "$WEBDAV_FULL_URL/hosts"; then
         success "授权列表上传成功"
+        info "最终的主机列表内容："
+        cat "$HOSTS_FILE"
         return 0
     else
         error "授权列表上传失败"

@@ -516,27 +516,39 @@
         echo
         info "授权主机列表："
         if [ -f "$HOSTS_FILE" ] && [ -s "$HOSTS_FILE" ]; then
-            printf "%-20s %-15s %-6s %-19s %-19s %-10s\n" "主机名" "公网IP" "端口" "授权时间" "最后测试时间" "状态"
-            echo "------------------------------------------------------------------------------"
+            # 定义列宽
+            local hostname_width=20
+            local ip_width=16
+            local port_width=8
+            local time_width=20
+            local status_width=10
+            
+            # 打印表头
+            printf "%-${hostname_width}s %-${ip_width}s %-${port_width}s %-${time_width}s %-${time_width}s %-${status_width}s\n" \
+                "主机名" "公网IP" "端口" "授权时间" "最后测试时间" "状态"
+            
+            # 计算总宽度并打印分隔线
+            local total_width=$((hostname_width + ip_width + port_width + time_width * 2 + status_width + 5))
+            printf "%${total_width}s\n" | tr ' ' '-'
             
             while IFS='|' read -r host timestamp ip port last_test || [ -n "$host" ]; do
                 if [ -n "$host" ]; then
                     # 测试连接状态
                     if [ -n "$ip" ] && [ -n "$port" ]; then
                         if nc -z -w 5 "$ip" "$port" >/dev/null 2>&1; then
-                            status="${GREEN}在线${NC}"
+                            status="\033[0;32m在线\033[0m"
                         else
-                            status="${RED}离线${NC}"
+                            status="\033[0;31m离线\033[0m"
                         fi
                     else
-                        status="${YELLOW}未知${NC}"
+                        status="\033[0;33m未知\033[0m"
                     fi
                     
                     # 如果时间戳为空，使用"-"代替
                     [ -z "$timestamp" ] && timestamp="-"
                     [ -z "$last_test" ] && last_test="-"
                     
-                    printf "%-20s %-15s %-6s %-19s %-19s %-10s\n" \
+                    printf "%-${hostname_width}s %-${ip_width}s %-${port_width}s %-${time_width}s %-${time_width}s %-${status_width}s\n" \
                         "$host" "${ip:--}" "${port:--}" "$timestamp" "$last_test" "$status"
                 fi
             done < "$HOSTS_FILE"

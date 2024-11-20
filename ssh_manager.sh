@@ -9,6 +9,7 @@ HOSTS_FILE="$SSH_MANAGER_DIR/hosts"
 CURRENT_USER="$(whoami)"
 CURRENT_HOST="$(hostname)"
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
+CONFIG_FILE="$SSH_MANAGER_DIR/config.sh"
 
 # WebDAV配置
 WEBDAV_BASE_URL="https://pan.hstz.com"
@@ -535,7 +536,7 @@ handle_menu() {
                     error "WebDAV凭据未设置"
                     return 1
                 fi
-                if ! upload_hosts_to_webdav "$WEBDAV_USER" "$WEBDAV_PASS"; then
+                if ! upload_to_webdav "$WEBDAV_USER" "$WEBDAV_PASS"; then
                     error "授权列表上传失败"
                     return 1
                 fi
@@ -573,69 +574,28 @@ upload_hosts_to_webdav() {
         warn "创建WebDAV目录失败，目录可能已存在"
     fi
     
-    # 创建临时文件
-    local temp_remote
-    temp_remote=$(mktemp)
-    local temp_merged
-    temp_merged=$(mktemp)
-    local temp_backup
-    temp_backup=$(mktemp)
+    local upload_failed=false
     
-    # 备份当前本地文件
-    cp "$HOSTS_FILE" "$temp_backup"
-    
-    info "尝试下载远程主机列表进行最终合并..."
-    if curl -s -k -u "$user:$pass" "$WEBDAV_FULL_URL/hosts" -o "$temp_remote"; then
-        if [ -s "$temp_remote" ]; then
-            info "获取到远程主机列表："
-            cat "$temp_remote"
-            
-            # 合并本地和远程列表，保留最新的时间戳
-            awk -F'|' 'NF==2{hosts[$1]=$0}END{for(h in hosts)print hosts[h]}' "$temp_backup" "$temp_remote" > "$temp_merged"
-            
-            if [ -s "$temp_merged" ]; then
-                # 对合并后的列表进行排序
-                sort -t'|' -k1,1 "$temp_merged" > "$HOSTS_FILE"
-                info "合并后的主机列表："
-                cat "$HOSTS_FILE"
+    # 检查WebDAV上是否已存在主机列表文件
+    if ! curl -s -k -I -u "$user:$pass" "$WEBDAV_FULL_URL/hosts" | grep -q "HTTP/.*[[:space:]]2"; then
+        info "WebDAV上不存在主机列表，准备上传..."
+        # 上传主机列表
+        if [ -f "$HOSTS_FILE" ]; then
+            if ! curl -s -k -T "$HOSTS_FILE" -u "$user:$pass" "$WEBDAV_FULL_URL/hosts"; then
+                error "主机列表上传失败"
+                upload_failed=true
             else
-                error "合并后的文件为空，还原本地文件"
-                cp "$temp_backup" "$HOSTS_FILE"
+                success "主机列表上传成功"
             fi
-        else
-            info "远程主机列表为空，使用本地列表"
         fi
     else
-        warn "下载远程主机列表失败，使用本地列表"
+        info "WebDAV上已存在主机列表，跳过上传"
     fi
     
-    # 上传合并后的主机列表
-    info "上传最终的主机列表..."
-    if [ -s "$HOSTS_FILE" ]; then
-        # 先删除WebDAV上的现有hosts文件
-        curl -s -k -X DELETE -u "$user:$pass" "$WEBDAV_FULL_URL/hosts" > /dev/null 2>&1
-        info "已删除WebDAV上的现有hosts文件"
-        
-        # 上传新的主机列表
-        if curl -s -k -T "$HOSTS_FILE" -u "$user:$pass" "$WEBDAV_FULL_URL/hosts"; then
-            success "授权列表上传成功"
-            info "最终的主机列表内容："
-            cat "$HOSTS_FILE"
-        else
-            error "授权列表上传失败"
-            # 如果上传失败，保留本地文件
-            cp "$temp_backup" "$HOSTS_FILE"
-            rm -f "$temp_merged" "$temp_remote" "$temp_backup"
-            return 1
-        fi
-    else
-        error "本地主机列表为空，取消上传"
-        rm -f "$temp_merged" "$temp_remote" "$temp_backup"
+    if [ "$upload_failed" = true ]; then
         return 1
     fi
     
-    # 清理临时文件
-    rm -f "$temp_merged" "$temp_remote" "$temp_backup"
     return 0
 }
 
@@ -746,9 +706,33 @@ configure_sshd() {
 
 # 主程序入口
 main() {
-    if [ $# -eq 2 ]; then
+    if [ $# -eq 0 ]; then
+        # 如果没有参数，直接显示交互式菜单
+        if [ -f "$CONFIG_FILE" ]; then
+            # 加载已保存的配置
+            source "$CONFIG_FILE"
+            if [ -n "$WEBDAV_USER" ] && [ -n "$WEBDAV_PASS" ]; then
+                info "使用已保存的WebDAV配置"
+                handle_menu
+            else
+                error "未找到WebDAV配置信息"
+                show_help
+                exit 1
+            fi
+        else
+            error "未找到配置文件，请先使用用户名和密码参数运行脚本进行初始化"
+            show_help
+            exit 1
+        fi
+    elif [ $# -eq 2 ]; then
         WEBDAV_USER="$1"
         WEBDAV_PASS="$2"
+        
+        # 保存配置到文件
+        mkdir -p "$(dirname "$CONFIG_FILE")"
+        echo "WEBDAV_USER='$WEBDAV_USER'" > "$CONFIG_FILE"
+        echo "WEBDAV_PASS='$WEBDAV_PASS'" >> "$CONFIG_FILE"
+        chmod 600 "$CONFIG_FILE"
         
         # 初始化环境
         init_env

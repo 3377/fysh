@@ -657,7 +657,43 @@
                 echo "2. 更新每个主机的最后测试时间"
                 echo "3. 显示测试结果"
                 ;;
-            {{ ... }}
+            "sync")
+                echo "从WebDAV同步功能说明："
+                echo "此功能用于从WebDAV服务器同步SSH密钥和主机授权列表。"
+                echo
+                echo "主要步骤："
+                echo "1. 检查并下载WebDAV上的SSH密钥"
+                echo "2. 验证密钥的有效性"
+                echo "3. 同步主机授权列表"
+                echo
+                echo "注意事项："
+                echo "- 确保WebDAV服务器可访问"
+                echo "- 需要正确的用户名和密码"
+                echo "- 同步过程中不会删除本地已有的授权"
+                ;;
+            "hosts")
+                echo "授权主机列表功能说明："
+                echo "此功能显示所有已授权的主机及其详细信息。"
+                echo
+                echo "显示信息："
+                echo "- 主机名"
+                echo "- 公网IP"
+                echo "- SSH端口"
+                echo "- 授权时间"
+                echo "- 最后测试时间"
+                echo "- 连接状态"
+                echo
+                echo "注意事项："
+                echo "- 时间戳格式：YYYY-MM-DD HH:MM:SS"
+                echo "- 连接状态实时检测"
+                echo "- 支持自动更新主机信息"
+                ;;
+            "help")
+                show_help
+                ;;
+            *)
+                error "未知的功能选项"
+                ;;
         esac
     }
 
@@ -694,7 +730,7 @@
                 4)
                     if [ -f "$CONFIG_FILE" ]; then
                         source "$CONFIG_FILE"
-                        upload_hosts_to_webdav "$WEBDAV_USER" "$WEBDAV_PASS"
+                        upload_to_webdav "$WEBDAV_USER" "$WEBDAV_PASS"
                     else
                         error "未找到配置文件"
                     fi

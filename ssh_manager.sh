@@ -517,11 +517,17 @@
         info "授权主机列表："
         if [ -f "$HOSTS_FILE" ] && [ -s "$HOSTS_FILE" ]; then
             # 定义列宽
-            local hostname_width=20
-            local ip_width=16
+            local hostname_width=16
+            local ip_width=15
             local port_width=8
-            local time_width=20
-            local status_width=10
+            local time_width=19
+            local status_width=6
+            
+            # 定义颜色代码
+            local GREEN='\033[0;32m'
+            local RED='\033[0;31m'
+            local YELLOW='\033[0;33m'
+            local NC='\033[0m'
             
             # 打印表头
             printf "%-${hostname_width}s %-${ip_width}s %-${port_width}s %-${time_width}s %-${time_width}s %-${status_width}s\n" \
@@ -536,20 +542,21 @@
                     # 测试连接状态
                     if [ -n "$ip" ] && [ -n "$port" ]; then
                         if nc -z -w 5 "$ip" "$port" >/dev/null 2>&1; then
-                            status="\033[0;32m在线\033[0m"
+                            status="${GREEN}在线${NC}"
                         else
-                            status="\033[0;31m离线\033[0m"
+                            status="${RED}离线${NC}"
                         fi
                     else
-                        status="\033[0;33m未知\033[0m"
+                        status="${YELLOW}未知${NC}"
                     fi
                     
                     # 如果时间戳为空，使用"-"代替
                     [ -z "$timestamp" ] && timestamp="-"
                     [ -z "$last_test" ] && last_test="-"
                     
-                    printf "%-${hostname_width}s %-${ip_width}s %-${port_width}s %-${time_width}s %-${time_width}s %-${status_width}s\n" \
-                        "$host" "${ip:--}" "${port:--}" "$timestamp" "$last_test" "$status"
+                    # 使用printf输出，注意颜色代码不计入宽度
+                    printf "%-${hostname_width}s %-${ip_width}s %-${port_width}s %-${time_width}s %-${time_width}s %b\n" \
+                        "$host" "$ip" "$port" "$timestamp" "$last_test" "$status"
                 fi
             done < "$HOSTS_FILE"
         else

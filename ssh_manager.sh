@@ -376,50 +376,22 @@
 
     # 授权当前主机
     authorize_current_host() {
-        local hostname
-        hostname=$(hostname)
         local timestamp
-        timestamp=$(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M:%S')
+        timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
+        local ip
+        ip=$(get_public_ip)
+        local port="22"  # 默认使用22端口，您可以根据需要修改
         
-        # 首先检查并修复SSH配置
-        info "检查当前主机的SSH配置..."
-        if ! check_and_fix_ssh_config; then
-            warn "SSH配置检查/修复失败，但将继续尝试授权过程"
-        fi
-        
-        # 检查主机是否已经在列表中
-        if grep -q "^${hostname}|" "$HOSTS_FILE"; then
-            info "主机 ${hostname} 已在授权列表中"
-        else
-            echo "${hostname}|${timestamp}" >> "$HOSTS_FILE"
-            sort -t'|' -k1,1 -u "$HOSTS_FILE" -o "$HOSTS_FILE"
-            success "已授权当前主机: ${hostname} (${timestamp})"
-        fi
-        
-        # 确保.ssh目录和authorized_keys文件存在且权限正确
-        local ssh_dir="$HOME/.ssh"
-        local auth_keys="$ssh_dir/authorized_keys"
-        
-        if [ ! -d "$ssh_dir" ]; then
-            mkdir -p "$ssh_dir"
-            chmod 700 "$ssh_dir"
-        fi
-        
-        if [ ! -f "$auth_keys" ]; then
-            touch "$auth_keys"
-        fi
-        
-        chmod 600 "$auth_keys"
-        
-        # 将公钥添加到authorized_keys
-        if [ -f "$SSH_DIR/${KEY_NAME}.pub" ]; then
-            cat "$SSH_DIR/${KEY_NAME}.pub" >> "$auth_keys"
-            sort -u "$auth_keys" -o "$auth_keys"
-            success "公钥已添加到authorized_keys"
-        else
-            error "找不到公钥文件：$SSH_DIR/${KEY_NAME}.pub"
+        # 检查主机是否已经授权
+        if grep -q "^${CURRENT_HOST}|" "$HOSTS_FILE"; then
+            warn "当前主机 ${CURRENT_HOST} 已在授权列表中"
             return 1
         fi
+        
+        # 添加新主机到授权列表
+        echo "${CURRENT_HOST}|${timestamp}|${ip}|${port}" >> "$HOSTS_FILE"
+        chmod 600 "$HOSTS_FILE"
+        success "已将当前主机 ${CURRENT_HOST} 添加到授权列表"
         
         return 0
     }
@@ -496,10 +468,24 @@
         echo
         info "授权主机列表："
         if [ -f "$HOSTS_FILE" ] && [ -s "$HOSTS_FILE" ] && ! grep -q "^<!DOCTYPE\|^<html\|^<a href=" "$HOSTS_FILE"; then
-            echo "主机名                  授权时间"
-            echo "----------------------------------------"
-            while IFS='|' read -r host timestamp; do
-                printf "%-22s %s\n" "$host" "$timestamp"
+            # 检查是否需要更新主机记录格式
+            if ! grep -q "|.*|.*|" "$HOSTS_FILE"; then
+                info "更新主机记录格式..."
+                update_host_format
+            fi
+            
+            printf "%-20s %-15s %-6s %-19s %-10s\n" "主机名" "公网IP" "端口" "授权时间" "连接状态"
+            echo "--------------------------------------------------------------------------------"
+            while IFS='|' read -r host timestamp ip port; do
+                if [ -n "$host" ]; then
+                    # 测试连接状态
+                    if test_ssh_connection "$host" "$port" "$ip" >/dev/null 2>&1; then
+                        status="${GREEN}在线${NC}"
+                    else
+                        status="${RED}离线${NC}"
+                    fi
+                    printf "%-20s %-15s %-6s %-19s %-10s\n" "$host" "$ip" "$port" "$timestamp" "$status"
+                fi
             done < "$HOSTS_FILE"
         else
             echo "暂无授权主机"
@@ -755,6 +741,101 @@
         else
             info "SSH配置已是最新，无需重启"
         fi
+        
+        return 0
+    }
+
+    # 获取公网IP
+    get_public_ip() {
+        local ip
+        ip=$(curl -s ip.sb)
+        if [ -n "$ip" ]; then
+            echo "$ip"
+            return 0
+        else
+            error "无法获取公网IP"
+            return 1
+        fi
+    }
+
+    # 测试主机SSH连接
+    test_ssh_connection() {
+        local host="$1"
+        local port="$2"
+        local ip="$3"
+        
+        info "测试连接 $host (${ip}:${port})..."
+        
+        # 使用-o BatchMode=yes避免密码提示
+        if ssh -i "$SSH_DIR/$KEY_NAME" -o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=5 -p "$port" "root@$ip" "echo 'Connection successful'" >/dev/null 2>&1; then
+            success "连接成功: $host (${ip}:${port})"
+            return 0
+        else
+            error "连接失败: $host (${ip}:${port})"
+            return 1
+        fi
+    }
+
+    # 获取SSH端口
+    get_ssh_port() {
+        local port
+        # 检查sshd_config文件中的Port配置
+        if [ -f "/etc/ssh/sshd_config" ]; then
+            port=$(grep "^Port" "/etc/ssh/sshd_config" | awk '{print $2}')
+        fi
+        # 如果没有找到Port配置，尝试从netstat获取
+        if [ -z "$port" ]; then
+            port=$(netstat -tlpn | grep "sshd" | grep "LISTEN" | awk '{split($4,a,":"); print a[length(a)]}' | head -n 1)
+        fi
+        # 如果仍然没有找到，使用默认端口22
+        if [ -z "$port" ]; then
+            port="22"
+        fi
+        echo "$port"
+    }
+
+    # 更新主机记录格式
+    update_host_format() {
+        local temp_file="${HOSTS_FILE}.tmp"
+        : > "$temp_file"
+        
+        while IFS='|' read -r host timestamp rest; do
+            if [ -n "$host" ]; then
+                if [[ "$rest" != *"|"* ]]; then
+                    # 旧格式，需要更新
+                    local ip port
+                    ip=$(curl -s ip.sb)
+                    port=$(get_ssh_port)  # 获取实际的SSH端口
+                    echo "${host}|${timestamp}|${ip}|${port}" >> "$temp_file"
+                else
+                    # 新格式，保持不变
+                    echo "${host}|${timestamp}|${rest}" >> "$temp_file"
+                fi
+            fi
+        done < "$HOSTS_FILE"
+        
+        mv "$temp_file" "$HOSTS_FILE"
+        chmod 600 "$HOSTS_FILE"
+    }
+
+    # 授权当前主机
+    authorize_current_host() {
+        local timestamp
+        timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
+        local ip port
+        ip=$(get_public_ip)
+        port=$(get_ssh_port)  # 获取实际的SSH端口
+        
+        # 检查主机是否已经授权
+        if grep -q "^${CURRENT_HOST}|" "$HOSTS_FILE"; then
+            warn "当前主机 ${CURRENT_HOST} 已在授权列表中"
+            return 1
+        fi
+        
+        # 添加新主机到授权列表
+        echo "${CURRENT_HOST}|${timestamp}|${ip}|${port}" >> "$HOSTS_FILE"
+        chmod 600 "$HOSTS_FILE"
+        success "已将当前主机 ${CURRENT_HOST} 添加到授权列表"
         
         return 0
     }

@@ -267,6 +267,33 @@
         return 0
     }
 
+    # 从WebDAV只下载hosts文件
+    download_hosts_file() {
+        local user="$1"
+        local pass="$2"
+        
+        info "正在从WebDAV下载hosts文件..."
+        
+        # 检查目录是否存在
+        if ! curl -s -k -L -I -u "$user:$pass" "${WEBDAV_FULL_URL}/" | grep -q "HTTP/.*[[:space:]]2"; then
+            error "WebDAV目录不存在"
+            return 1
+        fi
+        
+        # 下载hosts文件
+        local temp_remote="$SSH_MANAGER_DIR/hosts.remote"
+        if ! download_file "${WEBDAV_FULL_URL}/hosts.md" "$temp_remote" "$user" "$pass"; then
+            error "下载hosts文件失败"
+            rm -f "$temp_remote"
+            return 1
+        fi
+        
+        mv "$temp_remote" "$HOSTS_FILE"
+        chmod 600 "$HOSTS_FILE"
+        info "hosts文件下载成功"
+        return 0
+    }
+
     # 上传文件到WebDAV
     upload_to_webdav() {
         local user="$1"
@@ -364,7 +391,7 @@
     # 显示授权主机列表
     list_hosts() {
         info "从WebDAV获取最新主机列表..."
-        if ! download_from_webdav "$WEBDAV_USER" "$WEBDAV_PASS"; then
+        if ! download_hosts_file "$WEBDAV_USER" "$WEBDAV_PASS"; then
             error "获取主机列表失败"
             return 1
         fi

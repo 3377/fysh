@@ -444,6 +444,10 @@
             return 0
         fi
 
+        info "下载的hosts文件内容："
+        cat "$HOSTS_FILE"
+        echo
+
         echo
         info "授权主机列表："
         
@@ -464,12 +468,26 @@
         local temp_hosts="${HOSTS_FILE}.tmp"
         tr -d '\r' < "$HOSTS_FILE" > "$temp_hosts"
         
-        # 读取并显示主机列表
-        local host timestamp ip port last_test
-        while read -r line; do
+        info "处理后的临时文件内容："
+        cat "$temp_hosts"
+        echo
+        
+        # 逐行读取并处理
+        while read -r line || [ -n "$line" ]; do
+            info "处理行: $line"
             if [ -n "$line" ]; then
-                # 使用read和echo来分割字段，避免使用管道
-                IFS='|' read -r host timestamp ip port last_test <<< "$line"
+                # 使用临时数组存储字段
+                local fields
+                IFS='|' read -ra fields <<< "$line"
+                
+                # 提取字段
+                local host="${fields[0]}"
+                local timestamp="${fields[1]}"
+                local ip="${fields[2]}"
+                local port="${fields[3]}"
+                local last_test="${fields[4]}"
+                
+                info "解析结果: host=$host, ip=$ip, port=$port"
                 
                 if [ -n "$host" ]; then
                     if [ -n "$ip" ] && [ -n "$port" ]; then

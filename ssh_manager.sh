@@ -926,7 +926,7 @@
         
         # 如果主机列表文件不存在或为空，直接添加新记录
         if [ ! -f "$HOSTS_FILE" ] || [ ! -s "$HOSTS_FILE" ]; then
-            echo "${current_host}|${current_time}|${current_ip}|${current_port}|${current_time}" > "$HOSTS_FILE"
+            printf "%s|%s|%s|%s|%s\n" "$current_host" "$current_time" "$current_ip" "$current_port" "$current_time" > "$HOSTS_FILE"
             chmod 600 "$HOSTS_FILE"
             return 0
         fi
@@ -936,18 +936,18 @@
             if [ -n "$host" ]; then
                 if [ "$host" = "$current_host" ]; then
                     # 更新现有记录
-                    echo "${current_host}|${current_time}|${current_ip}|${current_port}|${current_time}" > "$temp_file"
+                    printf "%s|%s|%s|%s|%s\n" "$current_host" "$current_time" "$current_ip" "$current_port" "$current_time" >> "$temp_file"
                     found=true
                 else
                     # 保留其他主机记录
-                    echo "${host}|${timestamp}|${ip}|${port}|${last_test}" >> "$temp_file"
+                    printf "%s|%s|%s|%s|%s\n" "$host" "$timestamp" "$ip" "$port" "$last_test" >> "$temp_file"
                 fi
             fi
         done < "$HOSTS_FILE"
         
         # 如果是新主机，添加新记录
         if [ "$found" = false ]; then
-            echo "${current_host}|${current_time}|${current_ip}|${current_port}|${current_time}" >> "$temp_file"
+            printf "%s|%s|%s|%s|%s\n" "$current_host" "$current_time" "$current_ip" "$current_port" "$current_time" >> "$temp_file"
         fi
         
         # 替换原文件

@@ -538,6 +538,12 @@
             return 1
         fi
         
+        # 先从WebDAV下载最新的hosts文件
+        info "从WebDAV同步主机列表..."
+        if ! download_hosts_file "$WEBDAV_USER" "$WEBDAV_PASS"; then
+            warn "从WebDAV获取主机列表失败，将使用本地文件"
+        fi
+        
         # 确保从WebDAV获取最新密钥
         info "从WebDAV同步密钥..."
         if ! download_from_webdav "$WEBDAV_USER" "$WEBDAV_PASS"; then
@@ -947,6 +953,11 @@
         local temp_file="${HOSTS_FILE}.tmp"
         local found=false
         
+        # 先从WebDAV下载最新的hosts文件
+        if ! download_hosts_file "$WEBDAV_USER" "$WEBDAV_PASS"; then
+            warn "从WebDAV获取最新主机列表失败，将使用本地文件"
+        fi
+        
         # 创建临时文件
         : > "$temp_file"
         chmod 600 "$temp_file"
@@ -955,11 +966,17 @@
         if [ ! -f "$HOSTS_FILE" ] || [ ! -s "$HOSTS_FILE" ]; then
             printf "%s|%s|%s|%s|%s\n" "$current_host" "$current_time" "$current_ip" "$current_port" "$current_time" > "$HOSTS_FILE"
             chmod 600 "$HOSTS_FILE"
+            
+            # 立即上传新的hosts文件
+            if ! upload_to_webdav "$WEBDAV_USER" "$WEBDAV_PASS"; then
+                error "上传hosts文件失败"
+                return 1
+            fi
             return 0
         fi
         
         # 更新或添加主机记录
-        while IFS='|' read -r host timestamp ip port last_test || [ -n "$host" ]; do
+        while IFS='|' read -r host timestamp ip port last_test _; do
             if [ -n "$host" ]; then
                 if [ "$host" = "$current_host" ]; then
                     # 更新现有记录
@@ -980,6 +997,17 @@
         # 使用临时文件替换原文件
         mv "$temp_file" "$HOSTS_FILE"
         chmod 600 "$HOSTS_FILE"
+        
+        # 立即上传更新后的hosts文件
+        if ! upload_to_webdav "$WEBDAV_USER" "$WEBDAV_PASS"; then
+            error "上传hosts文件失败"
+            return 1
+        fi
+        
+        # 再次下载以确保同步
+        if ! download_hosts_file "$WEBDAV_USER" "$WEBDAV_PASS"; then
+            warn "从WebDAV获取更新后的主机列表失败"
+        fi
         
         return 0
     }

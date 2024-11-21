@@ -155,9 +155,18 @@
         local user="$3"
         local pass="$4"
 
-        # 使用curl下载文件，添加-L参数处理重定向
+        info "正在从 $url 下载文件..."
+        
+        # 使用curl下载文件，添加-L参数处理重定向，禁用缓存
         local response
-        response=$(curl -s -k -L -w "%{http_code}" -u "$user:$pass" -o "$output_file" "$url" --create-dirs)
+        response=$(curl -s -k -L \
+            -H "Cache-Control: no-cache" \
+            -H "Pragma: no-cache" \
+            -w "%{http_code}" \
+            -u "$user:$pass" \
+            -o "$output_file" \
+            "$url" \
+            --create-dirs)
         
         # 检查HTTP状态码
         if [ "$response" = "200" ] || [ "$response" = "201" ]; then
@@ -165,6 +174,8 @@
             if [ -s "$output_file" ]; then
                 # 检查文件内容是否是HTML（可能是错误页面）
                 if ! grep -q "^<!DOCTYPE\|^<html\|^<a href=" "$output_file"; then
+                    info "文件下载成功，大小: $(wc -c < "$output_file") 字节"
+                    info "文件内容预览: $(head -n 1 "$output_file")"
                     return 0
                 else
                     warn "下载的文件包含HTML内容，可能是错误页面"
@@ -425,45 +436,64 @@
             return 1
         fi
 
+        # 确保文件存在且有内容
+        if [ ! -f "$HOSTS_FILE" ]; then
+            error "主机列表文件不存在"
+            return 1
+        fi
+
+        # 检查文件内容
+        if [ ! -s "$HOSTS_FILE" ]; then
+            info "主机列表为空"
+            return 0
+        fi
+
         echo
         info "授权主机列表："
-        if [ -f "$HOSTS_FILE" ] && [ -s "$HOSTS_FILE" ]; then
-            # 定义颜色代码
-            local GREEN=$(echo -e "\033[32m")
-            local RED=$(echo -e "\033[31m")
-            local YELLOW=$(echo -e "\033[33m")
-            local NC=$(echo -e "\033[0m")
-            
-            # 打印表头
-            printf "%-16s %-14s %-7s %-19s %-19s %s\n" \
-                "主机名" "公网IP" "端口" "授权时间" "最后测试时间" "状态"
-            
-            # 打印分隔线
-            echo "--------------------------------------------------------------------------------"
-            
-            # 使用tr处理可能的\r\n换行符，并使用while循环逐行读取
-            tr -d '\r' < "$HOSTS_FILE" | while IFS='|' read -r host timestamp ip port last_test; do
-                if [ -n "$host" ]; then
-                    if [ -n "$ip" ] && [ -n "$port" ]; then
-                        # 使用相同的测试连接函数
-                        if test_host_connection "$host" "$ip" "$port"; then
-                            echo -e "$(printf "%-16s %-14s %-7s %-19s %-19s " \
-                                "$host" "$ip" "$port" "$timestamp" "$last_test")${GREEN}在线${NC}"
-                        else
-                            echo -e "$(printf "%-16s %-14s %-7s %-19s %-19s " \
-                                "$host" "$ip" "$port" "$timestamp" "$last_test")${RED}离线${NC}"
-                        fi
+        
+        # 定义颜色代码
+        local GREEN=$(echo -e "\033[32m")
+        local RED=$(echo -e "\033[31m")
+        local YELLOW=$(echo -e "\033[33m")
+        local NC=$(echo -e "\033[0m")
+        
+        # 打印表头
+        printf "%-16s %-14s %-7s %-19s %-19s %s\n" \
+            "主机名" "公网IP" "端口" "授权时间" "最后测试时间" "状态"
+        
+        # 打印分隔线
+        echo "--------------------------------------------------------------------------------"
+        
+        # 使用临时文件确保文件格式正确
+        local temp_hosts="${HOSTS_FILE}.tmp"
+        tr -d '\r' < "$HOSTS_FILE" > "$temp_hosts"
+        
+        # 显示文件内容以便调试
+        info "主机列表文件内容："
+        cat "$temp_hosts"
+        echo
+        
+        # 读取并显示主机列表
+        while IFS='|' read -r host timestamp ip port last_test; do
+            if [ -n "$host" ]; then
+                if [ -n "$ip" ] && [ -n "$port" ]; then
+                    # 使用相同的测试连接函数
+                    if test_host_connection "$host" "$ip" "$port"; then
+                        echo -e "$(printf "%-16s %-14s %-7s %-19s %-19s " \
+                            "$host" "$ip" "$port" "$timestamp" "$last_test")${GREEN}在线${NC}"
                     else
                         echo -e "$(printf "%-16s %-14s %-7s %-19s %-19s " \
-                            "$host" "$ip" "$port" "$timestamp" "$last_test")${YELLOW}未知${NC}"
+                            "$host" "$ip" "$port" "$timestamp" "$last_test")${RED}离线${NC}"
                     fi
+                else
+                    echo -e "$(printf "%-16s %-14s %-7s %-19s %-19s " \
+                        "$host" "$ip" "$port" "$timestamp" "$last_test")${YELLOW}未知${NC}"
                 fi
-            done
-        else
-            echo "暂无授权主机"
-            : > "$HOSTS_FILE"
-            chmod 600 "$HOSTS_FILE"
-        fi
+            fi
+        done < "$temp_hosts"
+        
+        # 清理临时文件
+        rm -f "$temp_hosts"
     }
 
     # 测试主机SSH连接

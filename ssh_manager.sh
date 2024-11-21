@@ -922,11 +922,13 @@
         
         # 创建临时文件
         : > "$temp_file"
+        chmod 600 "$temp_file"
         
-        # 如果主机列表文件不存在，创建新文件
-        if [ ! -f "$HOSTS_FILE" ]; then
-            touch "$HOSTS_FILE"
+        # 如果主机列表文件不存在或为空，直接添加新记录
+        if [ ! -f "$HOSTS_FILE" ] || [ ! -s "$HOSTS_FILE" ]; then
+            echo "${current_host}|${current_time}|${current_ip}|${current_port}|${current_time}" > "$HOSTS_FILE"
             chmod 600 "$HOSTS_FILE"
+            return 0
         fi
         
         # 更新或添加主机记录
@@ -934,7 +936,7 @@
             if [ -n "$host" ]; then
                 if [ "$host" = "$current_host" ]; then
                     # 更新现有记录
-                    echo "${current_host}|${current_time}|${current_ip}|${current_port}|${current_time}" >> "$temp_file"
+                    echo "${current_host}|${current_time}|${current_ip}|${current_port}|${current_time}" > "$temp_file"
                     found=true
                 else
                     # 保留其他主机记录

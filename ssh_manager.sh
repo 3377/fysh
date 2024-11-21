@@ -441,7 +441,8 @@
             # 打印分隔线
             echo "--------------------------------------------------------------------------------"
             
-            while IFS='|' read -r host timestamp ip port last_test || [ -n "$host" ]; do
+            # 使用tr处理可能的\r\n换行符，并使用while循环逐行读取
+            tr -d '\r' < "$HOSTS_FILE" | while IFS='|' read -r host timestamp ip port last_test; do
                 if [ -n "$host" ]; then
                     if [ -n "$ip" ] && [ -n "$port" ]; then
                         # 使用相同的测试连接函数
@@ -457,7 +458,7 @@
                             "$host" "$ip" "$port" "$timestamp" "$last_test")${YELLOW}未知${NC}"
                     fi
                 fi
-            done < "$HOSTS_FILE"
+            done
         else
             echo "暂无授权主机"
             : > "$HOSTS_FILE"
@@ -932,7 +933,7 @@
         fi
         
         # 更新或添加主机记录
-        while IFS='|' read -r host timestamp ip port last_test || [ -n "$host" ]; do
+        while IFS='|' read -r host timestamp ip port last_test; do
             if [ -n "$host" ]; then
                 if [ "$host" = "$current_host" ]; then
                     # 更新现有记录
@@ -944,7 +945,7 @@
                 fi
             fi
         done < "$HOSTS_FILE"
-        
+
         # 如果是新主机，添加新记录
         if [ "$found" = false ]; then
             printf "%s|%s|%s|%s|%s\n" "$current_host" "$current_time" "$current_ip" "$current_port" "$current_time" >> "$temp_file"

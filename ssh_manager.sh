@@ -465,20 +465,26 @@
         tr -d '\r' < "$HOSTS_FILE" > "$temp_hosts"
         
         # 读取并显示主机列表
-        while IFS='|' read -r host timestamp ip port last_test; do
-            if [ -n "$host" ]; then
-                if [ -n "$ip" ] && [ -n "$port" ]; then
-                    # 使用相同的测试连接函数
-                    if test_host_connection "$host" "$ip" "$port"; then
-                        echo -e "$(printf "%-16s %-14s %-7s %-19s %-19s " \
-                            "$host" "$ip" "$port" "$timestamp" "$last_test")${GREEN}在线${NC}"
+        local host timestamp ip port last_test
+        while read -r line; do
+            if [ -n "$line" ]; then
+                # 使用read和echo来分割字段，避免使用管道
+                IFS='|' read -r host timestamp ip port last_test <<< "$line"
+                
+                if [ -n "$host" ]; then
+                    if [ -n "$ip" ] && [ -n "$port" ]; then
+                        # 使用相同的测试连接函数
+                        if test_host_connection "$host" "$ip" "$port"; then
+                            echo -e "$(printf "%-16s %-14s %-7s %-19s %-19s " \
+                                "$host" "$ip" "$port" "$timestamp" "$last_test")${GREEN}在线${NC}"
+                        else
+                            echo -e "$(printf "%-16s %-14s %-7s %-19s %-19s " \
+                                "$host" "$ip" "$port" "$timestamp" "$last_test")${RED}离线${NC}"
+                        fi
                     else
                         echo -e "$(printf "%-16s %-14s %-7s %-19s %-19s " \
-                            "$host" "$ip" "$port" "$timestamp" "$last_test")${RED}离线${NC}"
+                            "$host" "$ip" "$port" "$timestamp" "$last_test")${YELLOW}未知${NC}"
                     fi
-                else
-                    echo -e "$(printf "%-16s %-14s %-7s %-19s %-19s " \
-                        "$host" "$ip" "$port" "$timestamp" "$last_test")${YELLOW}未知${NC}"
                 fi
             fi
         done < "$temp_hosts"

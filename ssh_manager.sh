@@ -463,10 +463,15 @@
         # 打印分隔线
         echo "--------------------------------------------------------------------------------"
 
-        # 使用一个简单的方式读取和处理每一行
+        # 使用临时文件处理
+        local temp_file="${HOSTS_FILE}.tmp"
+        tr -d '\r' < "$HOSTS_FILE" > "$temp_file"
+        
+        # 确保每行都有换行符
+        sed -i -e '$a\' "$temp_file"
+        
+        # 逐行读取并处理
         while IFS='|' read -r host timestamp ip port last_test _; do
-            info "正在处理: host=$host, ip=$ip, port=$port"
-            
             if [ -n "$host" ]; then
                 if [ -n "$ip" ] && [ -n "$port" ]; then
                     if test_host_connection "$host" "$ip" "$port"; then
@@ -481,7 +486,10 @@
                         "$host" "$ip" "$port" "$timestamp" "$last_test")${YELLOW}未知${NC}"
                 fi
             fi
-        done < <(grep -v '^[[:space:]]*$' "$HOSTS_FILE")
+        done < "$temp_file"
+        
+        # 清理临时文件
+        rm -f "$temp_file"
     }
 
     # 测试主机SSH连接

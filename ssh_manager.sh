@@ -154,8 +154,6 @@
         local output_file="$2"
         local user="$3"
         local pass="$4"
-
-        info "正在从 $url 下载文件..."
         
         # 使用curl下载文件，添加-L参数处理重定向，禁用缓存
         local response
@@ -174,8 +172,6 @@
             if [ -s "$output_file" ]; then
                 # 检查文件内容是否是HTML（可能是错误页面）
                 if ! grep -q "^<!DOCTYPE\|^<html\|^<a href=" "$output_file"; then
-                    info "文件下载成功，大小: $(wc -c < "$output_file") 字节"
-                    info "文件内容预览: $(head -n 1 "$output_file")"
                     return 0
                 else
                     warn "下载的文件包含HTML内容，可能是错误页面"
@@ -467,11 +463,6 @@
         # 使用临时文件确保文件格式正确
         local temp_hosts="${HOSTS_FILE}.tmp"
         tr -d '\r' < "$HOSTS_FILE" > "$temp_hosts"
-        
-        # 显示文件内容以便调试
-        info "主机列表文件内容："
-        cat "$temp_hosts"
-        echo
         
         # 读取并显示主机列表
         while IFS='|' read -r host timestamp ip port last_test; do

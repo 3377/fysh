@@ -511,6 +511,22 @@
             return 1
         fi
         
+        # 确保从WebDAV获取最新密钥
+        info "从WebDAV同步密钥..."
+        if ! download_from_webdav "$WEBDAV_USER" "$WEBDAV_PASS"; then
+            warn "从WebDAV获取密钥失败，将生成新的密钥对"
+            if ! generate_keys; then
+                error "生成密钥对失败"
+                return 1
+            fi
+        fi
+
+        # 部署公钥到本地authorized_keys
+        if ! deploy_local_key; then
+            error "部署公钥到本机失败"
+            return 1
+        fi
+        
         current_time=$(date "+%Y-%m-%d %H:%M:%S")
         
         # 更新主机记录
@@ -520,6 +536,43 @@
         fi
         
         success "已更新当前主机 $hostname 的授权信息"
+        return 0
+    }
+
+    # 部署公钥到本地authorized_keys
+    deploy_local_key() {
+        local pub_key="$SSH_DIR/${KEY_NAME}.pub"
+        local auth_keys="$HOME/.ssh/authorized_keys"
+        local ssh_dir="$HOME/.ssh"
+
+        # 确保.ssh目录存在且权限正确
+        if [ ! -d "$ssh_dir" ]; then
+            mkdir -p "$ssh_dir"
+            chmod 700 "$ssh_dir"
+        fi
+
+        # 确保authorized_keys文件存在
+        if [ ! -f "$auth_keys" ]; then
+            touch "$auth_keys"
+        fi
+        chmod 600 "$auth_keys"
+
+        # 检查公钥是否已存在于authorized_keys中
+        if [ -f "$pub_key" ]; then
+            local pub_key_content
+            pub_key_content=$(cat "$pub_key")
+            if ! grep -qF "$pub_key_content" "$auth_keys"; then
+                # 追加公钥到authorized_keys
+                echo "$pub_key_content" >> "$auth_keys"
+                success "已将公钥添加到 authorized_keys"
+            else
+                info "公钥已存在于 authorized_keys 中"
+            fi
+        else
+            error "公钥文件不存在: $pub_key"
+            return 1
+        fi
+
         return 0
     }
 

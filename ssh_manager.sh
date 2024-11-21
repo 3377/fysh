@@ -404,7 +404,7 @@
             else
                 [ -n "$host" ] && echo "$host|$timestamp|$ip|$port|$last_test" >> "$temp_file"
             fi
-        done < "$HOSTS_FILE"
+        done < <(tr -d '\r' < "$HOSTS_FILE")
 
         if [ "$has_changes" -eq 1 ]; then
             mv "$temp_file" "$HOSTS_FILE"
@@ -471,7 +471,7 @@
         sed -i -e '$a\' "$temp_file"
         
         # 逐行读取并处理
-        while IFS='|' read -r host timestamp ip port last_test _; do
+        while IFS='|' read -r host timestamp ip port last_test _ || [ -n "$host" ]; do
             if [ -n "$host" ]; then
                 if [ -n "$ip" ] && [ -n "$port" ]; then
                     if test_host_connection "$host" "$ip" "$port"; then
@@ -959,7 +959,7 @@
         fi
         
         # 更新或添加主机记录
-        while IFS='|' read -r host timestamp ip port last_test; do
+        while IFS='|' read -r host timestamp ip port last_test || [ -n "$host" ]; do
             if [ -n "$host" ]; then
                 if [ "$host" = "$current_host" ]; then
                     # 更新现有记录
@@ -970,14 +970,14 @@
                     printf "%s|%s|%s|%s|%s\n" "$host" "$timestamp" "$ip" "$port" "$last_test" >> "$temp_file"
                 fi
             fi
-        done < "$HOSTS_FILE"
+        done < <(tr -d '\r' < "$HOSTS_FILE")
 
         # 如果是新主机，添加新记录
         if [ "$found" = false ]; then
             printf "%s|%s|%s|%s|%s\n" "$current_host" "$current_time" "$current_ip" "$current_port" "$current_time" >> "$temp_file"
         fi
         
-        # 替换原文件
+        # 使用临时文件替换原文件
         mv "$temp_file" "$HOSTS_FILE"
         chmod 600 "$HOSTS_FILE"
         

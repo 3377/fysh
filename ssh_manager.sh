@@ -462,55 +462,26 @@
         
         # 打印分隔线
         echo "--------------------------------------------------------------------------------"
-        
-        # 使用临时文件确保文件格式正确
-        local temp_hosts="${HOSTS_FILE}.tmp"
-        tr -d '\r' < "$HOSTS_FILE" > "$temp_hosts"
-        
-        info "处理后的临时文件内容："
-        cat "$temp_hosts"
-        echo
 
-        # 使用mapfile读取所有行到数组
-        mapfile -t lines < "$temp_hosts"
-        
-        # 遍历数组处理每一行
-        for line in "${lines[@]}"; do
-            info "处理行: $line"
-            if [ -n "$line" ]; then
-                # 使用临时数组存储字段
-                local fields
-                IFS='|' read -ra fields <<< "$line"
-                
-                # 提取字段
-                local host="${fields[0]}"
-                local timestamp="${fields[1]}"
-                local ip="${fields[2]}"
-                local port="${fields[3]}"
-                local last_test="${fields[4]}"
-                
-                info "解析结果: host=$host, ip=$ip, port=$port"
-                
-                if [ -n "$host" ]; then
-                    if [ -n "$ip" ] && [ -n "$port" ]; then
-                        # 使用相同的测试连接函数
-                        if test_host_connection "$host" "$ip" "$port"; then
-                            echo -e "$(printf "%-16s %-14s %-7s %-19s %-19s " \
-                                "$host" "$ip" "$port" "$timestamp" "$last_test")${GREEN}在线${NC}"
-                        else
-                            echo -e "$(printf "%-16s %-14s %-7s %-19s %-19s " \
-                                "$host" "$ip" "$port" "$timestamp" "$last_test")${RED}离线${NC}"
-                        fi
+        # 使用一个简单的方式读取和处理每一行
+        while IFS='|' read -r host timestamp ip port last_test _; do
+            info "正在处理: host=$host, ip=$ip, port=$port"
+            
+            if [ -n "$host" ]; then
+                if [ -n "$ip" ] && [ -n "$port" ]; then
+                    if test_host_connection "$host" "$ip" "$port"; then
+                        echo -e "$(printf "%-16s %-14s %-7s %-19s %-19s " \
+                            "$host" "$ip" "$port" "$timestamp" "$last_test")${GREEN}在线${NC}"
                     else
                         echo -e "$(printf "%-16s %-14s %-7s %-19s %-19s " \
-                            "$host" "$ip" "$port" "$timestamp" "$last_test")${YELLOW}未知${NC}"
+                            "$host" "$ip" "$port" "$timestamp" "$last_test")${RED}离线${NC}"
                     fi
+                else
+                    echo -e "$(printf "%-16s %-14s %-7s %-19s %-19s " \
+                        "$host" "$ip" "$port" "$timestamp" "$last_test")${YELLOW}未知${NC}"
                 fi
             fi
-        done
-        
-        # 清理临时文件
-        rm -f "$temp_hosts"
+        done < <(grep -v '^[[:space:]]*$' "$HOSTS_FILE")
     }
 
     # 测试主机SSH连接

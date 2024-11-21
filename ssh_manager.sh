@@ -136,15 +136,13 @@
         chmod 600 "$SSH_DIR/$KEY_NAME"
         chmod 644 "$SSH_DIR/${KEY_NAME}.pub"
         
-        # 确保authorized_keys文件存在
-        local auth_keys="$SSH_DIR/authorized_keys"
-        touch "$auth_keys"
-        chmod 600 "$auth_keys"
+        # 更新authorized_keys
+        if ! update_authorized_keys; then
+            error "更新authorized_keys失败"
+            return 1
+        fi
         
-        # 将新生成的公钥添加到authorized_keys
-        cat "$SSH_DIR/${KEY_NAME}.pub" >> "$auth_keys"
-        
-        success "SSH密钥对生成成功，并已添加到本机的authorized_keys"
+        success "SSH密钥对生成成功，并已添加到authorized_keys"
         return 0
     }
 
@@ -512,6 +510,21 @@
         fi
         
         current_time=$(date "+%Y-%m-%d %H:%M:%S")
+        
+        # 确保密钥对存在
+        if [ ! -f "$SSH_DIR/$KEY_NAME" ] || [ ! -f "$SSH_DIR/${KEY_NAME}.pub" ]; then
+            info "从WebDAV下载密钥..."
+            if ! download_from_webdav "$WEBDAV_USER" "$WEBDAV_PASS"; then
+                error "从WebDAV下载密钥失败"
+                return 1
+            fi
+        fi
+        
+        # 更新本地的authorized_keys
+        if ! update_authorized_keys; then
+            error "更新authorized_keys失败"
+            return 1
+        fi
         
         # 更新主机记录
         if ! merge_host_record "$hostname" "$current_time" "$public_ip" "$ssh_port"; then
@@ -898,6 +911,45 @@
         # 替换原文件
         mv "$temp_file" "$HOSTS_FILE"
         chmod 600 "$HOSTS_FILE"
+        
+        return 0
+    }
+
+    # 更新或创建authorized_keys文件
+    update_authorized_keys() {
+        local pub_key="$SSH_DIR/${KEY_NAME}.pub"
+        local auth_keys="$HOME/.ssh/authorized_keys"
+        local auth_dir="$HOME/.ssh"
+        
+        # 确保.ssh目录存在且权限正确
+        if [ ! -d "$auth_dir" ]; then
+            mkdir -p "$auth_dir"
+            chmod 700 "$auth_dir"
+        fi
+        
+        # 如果authorized_keys不存在，创建它
+        if [ ! -f "$auth_keys" ]; then
+            touch "$auth_keys"
+        fi
+        
+        # 设置正确的权限
+        chmod 600 "$auth_keys"
+        
+        # 检查公钥是否已存在于authorized_keys中
+        if [ -f "$pub_key" ]; then
+            local pub_key_content
+            pub_key_content=$(cat "$pub_key")
+            if ! grep -q -F "$pub_key_content" "$auth_keys"; then
+                # 追加公钥到authorized_keys
+                cat "$pub_key" >> "$auth_keys"
+                success "已将公钥添加到 authorized_keys"
+            else
+                info "公钥已存在于 authorized_keys 中"
+            fi
+        else
+            error "公钥文件不存在: $pub_key"
+            return 1
+        fi
         
         return 0
     }

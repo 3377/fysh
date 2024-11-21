@@ -438,7 +438,6 @@
             return 1
         fi
 
-        # 检查文件内容
         if [ ! -s "$HOSTS_FILE" ]; then
             info "主机列表为空"
             return 0
@@ -471,9 +470,12 @@
         info "处理后的临时文件内容："
         cat "$temp_hosts"
         echo
+
+        # 使用mapfile读取所有行到数组
+        mapfile -t lines < "$temp_hosts"
         
-        # 逐行读取并处理
-        while read -r line || [ -n "$line" ]; do
+        # 遍历数组处理每一行
+        for line in "${lines[@]}"; do
             info "处理行: $line"
             if [ -n "$line" ]; then
                 # 使用临时数组存储字段
@@ -505,7 +507,7 @@
                     fi
                 fi
             fi
-        done < "$temp_hosts"
+        done
         
         # 清理临时文件
         rm -f "$temp_hosts"

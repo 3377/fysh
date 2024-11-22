@@ -463,33 +463,18 @@
         # 打印分隔线
         echo "--------------------------------------------------------------------------------"
 
-        # 使用临时文件处理
-        local temp_file="${HOSTS_FILE}.tmp"
-        tr -d '\r' < "$HOSTS_FILE" > "$temp_file"
-        
-        # 确保每行都有换行符
-        sed -i -e '$a\' "$temp_file"
-        
-        # 逐行读取并处理
-        while IFS='|' read -r host timestamp ip port last_test _ || [ -n "$host" ]; do
-            if [ -n "$host" ]; then
-                if [ -n "$ip" ] && [ -n "$port" ]; then
-                    if test_host_connection "$host" "$ip" "$port"; then
-                        echo -e "$(printf "%-16s %-14s %-7s %-19s %-19s " \
-                            "$host" "$ip" "$port" "$timestamp" "$last_test")${GREEN}在线${NC}"
-                    else
-                        echo -e "$(printf "%-16s %-14s %-7s %-19s %-19s " \
-                            "$host" "$ip" "$port" "$timestamp" "$last_test")${RED}离线${NC}"
-                    fi
+        # 直接读取文件内容并显示
+        while IFS='|' read -r host ip port timestamp last_test _; do
+            if [ -n "$host" ] && [ -n "$ip" ] && [ -n "$port" ]; then
+                if test_host_connection "$host" "$ip" "$port"; then
+                    printf "%-16s %-14s %-7s %-19s %-19s %s%s%s\n" \
+                        "$host" "$ip" "$port" "$timestamp" "$last_test" "${GREEN}在线${NC}"
                 else
-                    echo -e "$(printf "%-16s %-14s %-7s %-19s %-19s " \
-                        "$host" "$ip" "$port" "$timestamp" "$last_test")${YELLOW}未知${NC}"
+                    printf "%-16s %-14s %-7s %-19s %-19s %s%s%s\n" \
+                        "$host" "$ip" "$port" "$timestamp" "$last_test" "${RED}离线${NC}"
                 fi
             fi
-        done < "$temp_file"
-        
-        # 清理临时文件
-        rm -f "$temp_file"
+        done < <(tr -d '\r' < "$HOSTS_FILE")
     }
 
     # 测试主机SSH连接

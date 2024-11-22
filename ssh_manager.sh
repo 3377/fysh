@@ -450,29 +450,18 @@
         echo
         info "授权主机列表："
         
-        # 定义颜色代码
-        local GREEN=$(echo -e "\033[32m")
-        local RED=$(echo -e "\033[31m")
-        local YELLOW=$(echo -e "\033[33m")
-        local NC=$(echo -e "\033[0m")
-        
         # 打印表头
-        printf "%-16s %-14s %-7s %-19s %-19s %s\n" \
-            "主机名" "公网IP" "端口" "授权时间" "最后测试时间" "状态"
+        printf "%-16s %-14s %-7s %s\n" \
+            "主机名" "公网IP" "端口" "授权时间"
         
         # 打印分隔线
         echo "--------------------------------------------------------------------------------"
 
         # 直接读取文件内容并显示
-        while IFS='|' read -r host ip port timestamp last_test _; do
+        while IFS='|' read -r host timestamp ip port _; do
             if [ -n "$host" ] && [ -n "$ip" ] && [ -n "$port" ]; then
-                if test_host_connection "$host" "$ip" "$port"; then
-                    printf "%-16s %-14s %-7s %-19s %-19s %s%s%s\n" \
-                        "$host" "$ip" "$port" "$timestamp" "$last_test" "${GREEN}在线${NC}"
-                else
-                    printf "%-16s %-14s %-7s %-19s %-19s %s%s%s\n" \
-                        "$host" "$ip" "$port" "$timestamp" "$last_test" "${RED}离线${NC}"
-                fi
+                printf "%-16s %-14s %-7s %s\n" \
+                    "$host" "$ip" "$port" "$timestamp"
             fi
         done < <(tr -d '\r' < "$HOSTS_FILE")
     }
@@ -630,13 +619,9 @@
                 echo "- 公网IP"
                 echo "- SSH端口"
                 echo "- 授权时间"
-                echo "- 最后测试时间"
-                echo "- 连接状态"
                 echo
                 echo "注意事项："
                 echo "- 时间戳格式：YYYY-MM-DD HH:MM:SS"
-                echo "- 连接状态实时检测"
-                echo "- 支持自动更新主机信息"
                 ;;
             "help")
                 show_help
@@ -949,7 +934,7 @@
         
         # 如果主机列表文件不存在或为空，直接添加新记录
         if [ ! -f "$HOSTS_FILE" ] || [ ! -s "$HOSTS_FILE" ]; then
-            printf "%s|%s|%s|%s|%s\n" "$current_host" "$current_time" "$current_ip" "$current_port" "$current_time" > "$HOSTS_FILE"
+            printf "%s|%s|%s|%s\n" "$current_host" "$current_time" "$current_ip" "$current_port" > "$HOSTS_FILE"
             chmod 600 "$HOSTS_FILE"
             
             # 立即上传新的hosts文件
@@ -961,22 +946,22 @@
         fi
         
         # 更新或添加主机记录
-        while IFS='|' read -r host timestamp ip port last_test _; do
+        while IFS='|' read -r host timestamp ip port _; do
             if [ -n "$host" ]; then
                 if [ "$host" = "$current_host" ]; then
                     # 更新现有记录
-                    printf "%s|%s|%s|%s|%s\n" "$current_host" "$current_time" "$current_ip" "$current_port" "$current_time" >> "$temp_file"
+                    printf "%s|%s|%s|%s\n" "$current_host" "$current_time" "$current_ip" "$current_port" >> "$temp_file"
                     found=true
                 else
                     # 保留其他主机记录
-                    printf "%s|%s|%s|%s|%s\n" "$host" "$timestamp" "$ip" "$port" "$last_test" >> "$temp_file"
+                    printf "%s|%s|%s|%s\n" "$host" "$timestamp" "$ip" "$port" >> "$temp_file"
                 fi
             fi
         done < <(tr -d '\r' < "$HOSTS_FILE")
 
         # 如果是新主机，添加新记录
         if [ "$found" = false ]; then
-            printf "%s|%s|%s|%s|%s\n" "$current_host" "$current_time" "$current_ip" "$current_port" "$current_time" >> "$temp_file"
+            printf "%s|%s|%s|%s\n" "$current_host" "$current_time" "$current_ip" "$current_port" >> "$temp_file"
         fi
         
         # 使用临时文件替换原文件

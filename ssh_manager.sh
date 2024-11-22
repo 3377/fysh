@@ -341,8 +341,15 @@
             # 等待一小段时间确保删除操作完成
             sleep 1
             
+            # 创建临时文件，确保每行都以换行符结束
+            local temp_hosts_file
+            temp_hosts_file=$(mktemp)
+            while IFS= read -r line || [ -n "$line" ]; do
+                echo "$line" >> "$temp_hosts_file"
+            done < "$HOSTS_FILE"
+            
             info "上传新的hosts文件..."
-            if ! curl -s -k -T "$HOSTS_FILE" -u "$user:$pass" "${WEBDAV_FULL_URL}/hosts.md" > /dev/null; then
+            if ! curl -s -k -T "$temp_hosts_file" -u "$user:$pass" "${WEBDAV_FULL_URL}/hosts.md" > /dev/null; then
                 error "hosts文件上传失败"
                 upload_failed=true
             else
@@ -350,6 +357,9 @@
                 # 等待一小段时间确保上传操作完成
                 sleep 1
             fi
+            
+            # 清理临时文件
+            rm -f "$temp_hosts_file"
         fi
         
         if [ "$upload_failed" = true ]; then

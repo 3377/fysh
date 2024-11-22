@@ -338,12 +338,19 @@
             info "删除WebDAV上的现有hosts文件..."
             curl -s -k -X DELETE -u "$user:$pass" "${WEBDAV_FULL_URL}/hosts.md" > /dev/null 2>&1
             
+            # 等待一小段时间确保删除操作完成
+            sleep 1
+            
             info "上传新的hosts文件..."
-            if ! curl -s -k -T "$HOSTS_FILE" -u "$user:$pass" "${WEBDAV_FULL_URL}/hosts.md"; then
-                error "hosts文件上传失败"
+            local response
+            response=$(curl -s -k -w "%{http_code}" -T "$HOSTS_FILE" -u "$user:$pass" "${WEBDAV_FULL_URL}/hosts.md")
+            if [ "$response" != "201" ] && [ "$response" != "200" ]; then
+                error "hosts文件上传失败，HTTP状态码: $response"
                 upload_failed=true
             else
                 success "hosts文件上传成功"
+                # 等待一小段时间确保上传操作完成
+                sleep 1
             fi
         fi
         
@@ -953,7 +960,7 @@
                     printf "%s|%s|%s|%s\n" "$current_host" "$current_time" "$current_ip" "$current_port" >> "$temp_file"
                     found=true
                 else
-                    # 保留其他主机记录
+                    # 保留其他主机记录，确保每行都以换行符结束
                     printf "%s|%s|%s|%s\n" "$host" "$timestamp" "$ip" "$port" >> "$temp_file"
                 fi
             fi
@@ -973,6 +980,9 @@
             error "上传hosts文件失败"
             return 1
         fi
+        
+        # 等待一小段时间再下载
+        sleep 1
         
         # 再次下载以确保同步
         if ! download_hosts_file "$WEBDAV_USER" "$WEBDAV_PASS"; then

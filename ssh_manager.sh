@@ -321,23 +321,11 @@
             # 上传密钥文件
             if [ -f "$SSH_DIR/$KEY_NAME" ]; then
                 info "上传SSH密钥..."
-                # 上传私钥
-                local priv_key_response
-                priv_key_response=$(curl -s -k -T "$SSH_DIR/$KEY_NAME" -u "$user:$pass" "${WEBDAV_FULL_URL}/${KEY_NAME}")
-                if [[ "$priv_key_response" != *"201"* ]] && [[ "$priv_key_response" != *"200"* ]]; then
-                    error "SSH私钥上传失败"
+                if ! curl -s -k -T "$SSH_DIR/$KEY_NAME" -u "$user:$pass" "${WEBDAV_FULL_URL}/${KEY_NAME}" > /dev/null || \
+                   ! curl -s -k -T "$SSH_DIR/${KEY_NAME}.pub" -u "$user:$pass" "${WEBDAV_FULL_URL}/${KEY_NAME}.pub" > /dev/null; then
+                    error "SSH密钥上传失败"
                     upload_failed=true
-                fi
-                
-                # 上传公钥
-                local pub_key_response
-                pub_key_response=$(curl -s -k -T "$SSH_DIR/${KEY_NAME}.pub" -u "$user:$pass" "${WEBDAV_FULL_URL}/${KEY_NAME}.pub")
-                if [[ "$pub_key_response" != *"201"* ]] && [[ "$pub_key_response" != *"200"* ]]; then
-                    error "SSH公钥上传失败"
-                    upload_failed=true
-                fi
-                
-                if [ "$upload_failed" = false ]; then
+                else
                     success "SSH密钥上传成功"
                 fi
             fi
@@ -354,10 +342,8 @@
             sleep 1
             
             info "上传新的hosts文件..."
-            local response
-            response=$(curl -s -k -T "$HOSTS_FILE" -u "$user:$pass" "${WEBDAV_FULL_URL}/hosts.md")
-            if [[ "$response" != *"201"* ]] && [[ "$response" != *"200"* ]]; then
-                error "hosts文件上传失败，响应：$response"
+            if ! curl -s -k -T "$HOSTS_FILE" -u "$user:$pass" "${WEBDAV_FULL_URL}/hosts.md" > /dev/null; then
+                error "hosts文件上传失败"
                 upload_failed=true
             else
                 success "hosts文件上传成功"

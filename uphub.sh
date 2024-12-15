@@ -2,7 +2,8 @@
 
 # 定义固定变量
 DOCKERHUB_USERNAME="drfyup"  # DockerHub用户名，不要包含@qq.com
-DOCKERHUB_PASSWORD="你的dockerhub密码"
+DOCKERHUB_PASSWORD="" #密码
+DOCKERHUB_REPO="drfyup"  # 仓库名称
 
 # 显示本地所有镜像
 echo "本地镜像列表："
@@ -12,21 +13,16 @@ docker images
 echo -e "\n您可以使用 REPOSITORY 或 IMAGE ID 来指定镜像"
 read -p "请输入要上传的镜像名称（REPOSITORY 或 IMAGE ID）: " IMAGE_NAME
 read -p "请输入本地镜像标签（TAG）: " IMAGE_TAG
+read -p "请输入要上传到 DockerHub 的镜像名称（默认为 $DOCKERHUB_REPO）: " UPLOAD_IMAGE_NAME
+read -p "请输入要上传到 DockerHub 的新标签（直接回车则使用相同标签）: " UPLOAD_TAG
 
-# 从IMAGE_NAME中提取默认仓库名
-# 如果IMAGE_NAME包含/，取最后一部分；否则直接使用IMAGE_NAME
-DEFAULT_REPO=$(echo "$IMAGE_NAME" | awk -F'/' '{print $NF}')
-
-# 输入目标仓库信息
-read -p "请输入要上传到 DockerHub 的仓库名称（直接回车使用：$DEFAULT_REPO）: " UPLOAD_REPO
-read -p "请输入要上传到 DockerHub 的标签（直接回车使用：$IMAGE_TAG）: " UPLOAD_TAG
-
-# 设置默认值
-if [ -z "$UPLOAD_REPO" ]; then
-    UPLOAD_REPO=$DEFAULT_REPO
-    echo "将使用本地镜像名称作为仓库名: $UPLOAD_REPO"
+# 如果没有输入上传镜像名称，则使用默认的仓库名称
+if [ -z "$UPLOAD_IMAGE_NAME" ]; then
+    UPLOAD_IMAGE_NAME=$DOCKERHUB_REPO
+    echo "将使用默认镜像名称: $UPLOAD_IMAGE_NAME"
 fi
 
+# 如果没有输入上传标签，则使用本地标签
 if [ -z "$UPLOAD_TAG" ]; then
     UPLOAD_TAG=$IMAGE_TAG
     echo "将使用本地标签: $IMAGE_TAG"
@@ -50,7 +46,7 @@ fi
 
 # 给镜像打标签
 echo "正在给镜像打标签..."
-docker tag "$IMAGE_NAME:$IMAGE_TAG" "$DOCKERHUB_USERNAME/$UPLOAD_REPO:$UPLOAD_TAG"
+docker tag "$IMAGE_NAME:$IMAGE_TAG" "$DOCKERHUB_USERNAME/$UPLOAD_IMAGE_NAME:$UPLOAD_TAG"
 
 # 检查标签是否成功
 if [ $? -ne 0 ]; then
@@ -60,7 +56,7 @@ fi
 
 # 推送镜像到 DockerHub
 echo "正在推送镜像到 DockerHub..."
-docker push "$DOCKERHUB_USERNAME/$UPLOAD_REPO:$UPLOAD_TAG"
+docker push "$DOCKERHUB_USERNAME/$UPLOAD_IMAGE_NAME:$UPLOAD_TAG"
 
 # 检查推送状态
 if [ $? -ne 0 ]; then
@@ -69,12 +65,12 @@ if [ $? -ne 0 ]; then
 fi
 
 echo "镜像上传成功！"
-echo "镜像已上传到: $DOCKERHUB_USERNAME/$UPLOAD_REPO:$UPLOAD_TAG"
+echo "镜像已上传到: $DOCKERHUB_USERNAME/$UPLOAD_IMAGE_NAME:$UPLOAD_TAG"
 
 # 询问是否清理本地标签
 read -p "是否清理本地新建的标签？(y/n): " CLEAN_TAG
 if [ "$CLEAN_TAG" = "y" ] || [ "$CLEAN_TAG" = "Y" ]; then
-    docker rmi "$DOCKERHUB_USERNAME/$UPLOAD_REPO:$UPLOAD_TAG"
+    docker rmi "$DOCKERHUB_USERNAME/$UPLOAD_IMAGE_NAME:$UPLOAD_TAG"
     echo "本地标签已清理"
 fi
 

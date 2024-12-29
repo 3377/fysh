@@ -1,8 +1,14 @@
 #!/bin/bash
 
-# 定义固定变量
-DOCKERHUB_USERNAME="drfyup"  # DockerHub用户名，不要包含@qq.com
-DOCKERHUB_PASSWORD="" #密码
+# 检查参数数量
+if [ "$#" -ne 2 ]; then
+    echo "用法: $0 <DockerHub用户名> <DockerHub密码>"
+    exit 1
+fi
+
+# 从参数中获取用户名和密码
+DOCKERHUB_USERNAME="$1"  # DockerHub用户名
+DOCKERHUB_PASSWORD="$2"  # 密码
 DOCKERHUB_REPO="drfyup"  # 仓库名称
 
 # 显示本地所有镜像
@@ -12,21 +18,18 @@ docker images
 # 交互式输入镜像信息
 echo -e "\n您可以使用 REPOSITORY 或 IMAGE ID 来指定镜像"
 read -p "请输入要上传的镜像名称（REPOSITORY 或 IMAGE ID）: " IMAGE_NAME
-read -p "请输入本地镜像标签（TAG）: " IMAGE_TAG
-read -p "请输入要上传到 DockerHub 的镜像名称（默认为 $DOCKERHUB_REPO）: " UPLOAD_IMAGE_NAME
-read -p "请输入要上传到 DockerHub 的新标签（直接回车则使用相同标签）: " UPLOAD_TAG
 
-# 如果没有输入上传镜像名称，则使用默认的仓库名称
-if [ -z "$UPLOAD_IMAGE_NAME" ]; then
-    UPLOAD_IMAGE_NAME=$DOCKERHUB_REPO
-    echo "将使用默认镜像名称: $UPLOAD_IMAGE_NAME"
-fi
+# 输入本地镜像标签，默认值为 latest
+read -p "请输入本地镜像标签（TAG，默认为 latest）: " IMAGE_TAG
+IMAGE_TAG=${IMAGE_TAG:-latest}  # 如果未输入，使用 latest
 
-# 如果没有输入上传标签，则使用本地标签
-if [ -z "$UPLOAD_TAG" ]; then
-    UPLOAD_TAG=$IMAGE_TAG
-    echo "将使用本地标签: $IMAGE_TAG"
-fi
+# 列出相同标签并询问要上传到 DockerHub 的镜像名称
+read -p "请输入要上传到 DockerHub 的镜像名称（默认为 $IMAGE_NAME）: " UPLOAD_IMAGE_NAME
+UPLOAD_IMAGE_NAME=${UPLOAD_IMAGE_NAME:-$IMAGE_NAME}  # 如果未输入，使用 IMAGE_NAME
+
+# 列出要上传的标签，默认为相同标签
+read -p "请输入要上传到 DockerHub 的新标签（默认为 $IMAGE_TAG，直接回车则使用相同标签）: " UPLOAD_TAG
+UPLOAD_TAG=${UPLOAD_TAG:-$IMAGE_TAG}  # 如果未输入，使用 IMAGE_TAG
 
 # 验证镜像是否存在
 if ! docker image inspect "$IMAGE_NAME:$IMAGE_TAG" >/dev/null 2>&1; then

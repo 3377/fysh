@@ -15,13 +15,19 @@ DOCKERHUB_REPO="drfyup"  # 仓库名称
 echo "本地镜像列表："
 docker images
 
-# 交互式输入镜像信息
-echo -e "\n您可以使用 REPOSITORY 或 IMAGE ID 来指定镜像"
-read -p "请输入要上传的镜像名称（REPOSITORY 或 IMAGE ID）: " IMAGE_NAME
+# 获取最新的镜像信息
+LATEST_IMAGE=$(docker images --format "{{.Repository}}:{{.Tag}}" | head -n 1)
+LATEST_IMAGE_NAME=$(echo $LATEST_IMAGE | cut -d':' -f1)
+LATEST_IMAGE_TAG=$(echo $LATEST_IMAGE | cut -d':' -f2)
 
-# 输入本地镜像标签，默认值为 latest
-read -p "请输入本地镜像标签（TAG，默认为 latest）: " IMAGE_TAG
-IMAGE_TAG=${IMAGE_TAG:-latest}  # 如果未输入，使用 latest
+# 交互式输入镜像信息，默认使用最新的镜像
+echo -e "\n您可以使用 REPOSITORY 或 IMAGE ID 来指定镜像"
+read -p "请输入要上传的镜像名称（REPOSITORY 或 IMAGE ID，默认为 $LATEST_IMAGE_NAME）: " IMAGE_NAME
+IMAGE_NAME=${IMAGE_NAME:-$LATEST_IMAGE_NAME}  # 如果未输入，使用最新镜像名
+
+# 输入本地镜像标签，默认使用最新镜像的标签
+read -p "请输入本地镜像标签（TAG，默认为 $LATEST_IMAGE_TAG）: " IMAGE_TAG
+IMAGE_TAG=${IMAGE_TAG:-$LATEST_IMAGE_TAG}  # 如果未输入，使用最新镜像标签
 
 # 列出相同标签并询问要上传到 DockerHub 的镜像名称
 read -p "请输入要上传到 DockerHub 的镜像名称（默认为 $IMAGE_NAME）: " UPLOAD_IMAGE_NAME
@@ -70,12 +76,10 @@ fi
 echo "镜像上传成功！"
 echo "镜像已上传到: $DOCKERHUB_USERNAME/$UPLOAD_IMAGE_NAME:$UPLOAD_TAG"
 
-# 询问是否清理本地标签
-read -p "是否清理本地新建的标签？(y/n): " CLEAN_TAG
-if [ "$CLEAN_TAG" = "y" ] || [ "$CLEAN_TAG" = "Y" ]; then
-    docker rmi "$DOCKERHUB_USERNAME/$UPLOAD_IMAGE_NAME:$UPLOAD_TAG"
-    echo "本地标签已清理"
-fi
+# 自动清理本地标签（移除询问步骤）
+echo "正在清理本地新建的标签..."
+docker rmi "$DOCKERHUB_USERNAME/$UPLOAD_IMAGE_NAME:$UPLOAD_TAG"
+echo "本地标签已清理"
 
 # 登出 DockerHub
 docker logout

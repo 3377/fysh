@@ -30,7 +30,6 @@ payload:
 # IP-ASN: 2
 # IP-CIDR: 2
 # TOTAL: 51
-payload:
   - DOMAIN,api.msn.com
   - DOMAIN,api.statsig.com
   - DOMAIN,assets.msn.com
@@ -88,7 +87,6 @@ payload:
 # UPDATED: 2024-07-03 16:18:28
 # DOMAIN-SUFFIX: 9
 # TOTAL: 9
-payload:
   - DOMAIN-SUFFIX,bing.com
   - DOMAIN-SUFFIX,bing.com.cn
   - DOMAIN-SUFFIX,bing.net

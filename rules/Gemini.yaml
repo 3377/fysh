@@ -8,6 +8,7 @@
 # TOTAL: 13
 payload:
   - DOMAIN,ai.google.dev
+  - lh3.googleusercontent.com
   - DOMAIN,alkalimakersuite-pa.clients6.google.com
   - DOMAIN,makersuite.google.com
   - DOMAIN-SUFFIX,bard.google.com
